@@ -1,0 +1,20 @@
+# python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# Data files
+data/
+datasets/
+
+# pytest cache
+.pytest_cache/
