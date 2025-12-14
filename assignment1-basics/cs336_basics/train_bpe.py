@@ -10,51 +10,6 @@ from collections import defaultdict
 GPT2_PATTERN = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
 
-class Node:
-    """Represents a node in a doubly linked list for tokens."""
-    def __init__(self, token: bytes):
-        self.token = token
-        self.prev: Node | None = None
-        self.next: Node | None = None
-
-
-class TokenSequence:
-    """Represents a sequence of tokens as a doubly linked list."""
-    def __init__(self, tokens: tuple[bytes, ...], count: int):
-        self.count = count  # Frequency of this sequence
-        self.head: Node | None = None
-        self.tail: Node | None = None
-        
-        # Build the doubly linked list
-        if tokens:
-            self.head = Node(tokens[0])
-            current = self.head
-            for token in tokens[1:]:
-                new_node = Node(token)
-                current.next = new_node
-                new_node.prev = current
-                current = new_node
-            self.tail = current
-    
-    def to_tuple(self) -> tuple[bytes, ...]:
-        """Converts the linked list back to a tuple"""
-        result = []
-        current = self.head
-        while current:
-            result.append(current.token)
-            current = current.next
-        return tuple(result)
-    
-    def get_pairs(self) -> list[tuple[Node, bytes, bytes]]:
-        """Gets all adjacent pairs and their positions (first node)"""
-        pairs = []
-        current = self.head
-        while current and current.next:
-            pairs.append((current, current.token, current.next.token))
-            current = current.next
-        return pairs
-
-
 class HeapItem:
     """
     Wrapper for heap items with custom comparison logic.
@@ -202,59 +157,61 @@ def pre_tokenize(
     return total_token_counts
 
 
-def merge_pair_in_sequence(
-    seq: TokenSequence, 
-    pair: tuple[bytes, bytes], 
-    merged_token: bytes
+def merge(
+    token_counts: dict[tuple[bytes], int],
+    pair_counts: dict[tuple[bytes, bytes], int],
+    pair_to_tokens: dict[tuple[bytes, bytes], set[tuple[bytes]]],
+    pair: tuple[bytes, bytes]
 ) -> set[tuple[bytes, bytes]]:
     """
-    Merge all occurrences of the given pair in the TokenSequence.
-    Returns a set of affected pairs (both removed and newly created).
+    Merge the given pair in the token_counts and update pair_counts and pair_to_tokens accordingly.
+    Returns the set of affected pairs whose counts need to be updated.
     """
     affected_pairs = set()
-    current = seq.head
-    
-    while current and current.next:
-        if (current.token, current.next.token) == pair:
-            # Record the pair being removed
-            affected_pairs.add(pair)
-            
-            # Record the affected pair on the left
-            if current.prev:
-                affected_pairs.add((current.prev.token, current.token))
-            
-            # Record the affected pair on the right
-            if current.next.next:
-                affected_pairs.add((current.next.token, current.next.next.token))
-            
-            # Perform merge: change current's token to merged_token, skip current.next
-            next_node = current.next
-            current.token = merged_token
-            current.next = next_node.next
-            if next_node.next:
-                next_node.next.prev = current
+    tokens_to_update = pair_to_tokens[pair].copy()
+
+    for old_key in tokens_to_update:
+        count = token_counts[old_key]
+
+        # Create new token by merging the pair
+        new_token = []
+        i = 0
+        while i < len(old_key):
+            if i < len(old_key) - 1 and (old_key[i], old_key[i + 1]) == pair:
+                new_token.append(old_key[i] + old_key[i + 1])
+                i += 2
             else:
-                seq.tail = current
-            
-            # Record newly created pairs
-            if current.prev:
-                affected_pairs.add((current.prev.token, merged_token))
-            if current.next:
-                affected_pairs.add((merged_token, current.next.token))
-            
-            # Continue from the merged node
-            # Keep current unchanged as we need to check the new current.next
-        else:
-            current = current.next
+                new_token.append(old_key[i])
+                i += 1
+        new_key = tuple(new_token)
+
+        for i in range(len(old_key) - 1):
+            left_pair = (old_key[i], old_key[i + 1])
+            pair_counts[left_pair] -= count
+            if pair_counts[left_pair] <= 0:
+                del pair_counts[left_pair]
+            pair_to_tokens[left_pair].discard(old_key)
+            affected_pairs.add(left_pair)
+
+        for i in range(len(new_key) - 1):
+            new_left_pair = (new_key[i], new_key[i + 1])
+            pair_counts[new_left_pair] += count
+            pair_to_tokens[new_left_pair].add(new_key)
+            affected_pairs.add(new_left_pair)
+        
+        token_counts[new_key] = token_counts.get(new_key, 0) + count
     
+    pair_to_tokens[pair].clear()
+
     return affected_pairs
+    
 
 def train_bpe(
     input_path: str,
     vocab_size: int,
     special_tokens: list[str],
-    merge_outpath: str = None,
-    vocab_outpath: str = None,
+    merge_outpath: str | None = None,
+    vocab_outpath: str | None = None,
     **kwargs
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """
@@ -276,126 +233,53 @@ def train_bpe(
     token_counts = pre_tokenize(input_path, special_tokens)
     print(f"Number of unique pre-tokens: {len(token_counts)}")
 
-    # Convert token_counts to doubly linked list structure
-    sequences: dict[tuple[bytes, ...], TokenSequence] = {}
-    for token_seq, count in token_counts.items():
-        sequences[token_seq] = TokenSequence(token_seq, count)
-    
-    # Compute initial pair counts and build index from pairs to sequences
+    # Get the initial pairs and their counts
     pair_counts: dict[tuple[bytes, bytes], int] = defaultdict(int)
-    pair_to_sequences: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]] = defaultdict(set)
+    pair_to_tokens: dict[tuple[bytes, bytes], set[tuple[bytes]]] = defaultdict(set)
+    for token_tuple, count in token_counts.items():
+        for i in range(len(token_tuple) - 1):
+            pair = (token_tuple[i], token_tuple[i + 1])
+            pair_counts[pair] += count
+            pair_to_tokens[pair].add(token_tuple)
     
-    for token_seq, seq in sequences.items():
-        for node, token1, token2 in seq.get_pairs():
-            pair = (token1, token2)
-            pair_counts[pair] += seq.count
-            pair_to_sequences[pair].add(token_seq)
-    
-    print(f"Number of unique pairs: {len(pair_counts)}")
-    
-    # Use max heap to store pairs with custom comparison logic
-    # HeapItem compares by: count (desc), first token (desc), second token (desc)
-    heap = [HeapItem(count, pair) for pair, count in pair_counts.items()]
-    heapq.heapify(heap)
-    
-    # Record performed merges
+    # Create a max-heap of pairs based on their counts
+    heap: list[HeapItem] = []
+    for pair, count in pair_counts.items():
+        heapq.heappush(heap, HeapItem(count, pair))
+
+    # Merge tokens until reaching the desired vocabulary size
     merges: list[tuple[bytes, bytes]] = []
-    
-    # Perform merge operations until target vocabulary size is reached
     num_merges = vocab_size - len(vocab)
-    print(f"Performing {num_merges} merges...")
-    
-    merge_iteration = 0
     last_report_time = time.time()
     
-    while len(vocab) < vocab_size and heap:
-        # Get the pair with highest frequency from the heap
-        while heap:
-            item = heapq.heappop(heap)
-            expected_count = item.count
-            best_pair = item.pair
-            
-            # Check if this pair is still valid (lazy deletion)
-            current_count = pair_counts.get(best_pair, 0)
-            if current_count == expected_count and current_count > 0:
-                break
-        else:
-            # Heap is empty
+    while len(vocab) < vocab_size:
+        if not heap:
+            print("No more pairs to merge.")
             break
-        
-        # Create the new merged token
-        merged_token = best_pair[0] + best_pair[1]
-        
-        # Add the new token to vocabulary
-        vocab[len(vocab)] = merged_token
-        merges.append(best_pair)
-        
-        # Execute merge in all sequences containing this pair
-        affected_sequences = list(pair_to_sequences[best_pair])
-        
-        # Collect all pairs that need to be updated
-        pairs_to_update: dict[tuple[bytes, bytes], int] = defaultdict(int)
-        
-        for token_seq in affected_sequences:
-            if token_seq not in sequences:
-                continue
-                
-            seq = sequences[token_seq]
+
+        # Lazy deletion: pop until we find a valid pair
+        while heap:
+            top_item = heapq.heappop(heap)
+            current_count = pair_counts.get(top_item.pair, 0)
+            if current_count == top_item.count:
+                break
             
-            # Execute merge in sequence and get affected pairs
-            affected_pairs = merge_pair_in_sequence(seq, best_pair, merged_token)
-            
-            # Update pair counts
-            for pair in affected_pairs:
-                if pair == best_pair:
-                    # This pair was removed
-                    pairs_to_update[pair] -= seq.count
-                elif pair[0] == merged_token or pair[1] == merged_token:
-                    # Newly created pair
-                    pairs_to_update[pair] += seq.count
-                else:
-                    # Old pair that was removed
-                    pairs_to_update[pair] -= seq.count
-            
-            # Update the key in sequences dictionary
-            new_token_seq = seq.to_tuple()
-            if new_token_seq != token_seq:
-                del sequences[token_seq]
-                sequences[new_token_seq] = seq
-                
-                # Update pair_to_sequences
-                for pair in list(pair_to_sequences.keys()):
-                    if token_seq in pair_to_sequences[pair]:
-                        pair_to_sequences[pair].discard(token_seq)
-                        if not pair_to_sequences[pair]:
-                            del pair_to_sequences[pair]
+            # If counts don't match, but the pair still exists, push updated count
+            if top_item.pair in pair_counts and current_count > 0:
+                heapq.heappush(heap, HeapItem(current_count, top_item.pair))
+        else:
+            print("No valid pairs left to merge.")
+            break
+
+        vocab[len(vocab)] = top_item.pair[0] + top_item.pair[1]
+        merges.append(top_item.pair)
+
+        affected_pairs = merge(token_counts, pair_counts, pair_to_tokens, top_item.pair)
+
+        for affected_pair in affected_pairs:
+            if affected_pair in pair_counts and pair_counts[affected_pair] > 0:
+                heapq.heappush(heap, HeapItem(pair_counts[affected_pair], affected_pair))
         
-        # Batch update pair_counts and heap
-        for pair, count_delta in pairs_to_update.items():
-            old_count = pair_counts.get(pair, 0)
-            new_count = old_count + count_delta
-            
-            if new_count <= 0:
-                # Remove this pair
-                if pair in pair_counts:
-                    del pair_counts[pair]
-                if pair in pair_to_sequences:
-                    del pair_to_sequences[pair]
-            else:
-                pair_counts[pair] = new_count
-                # Push updated pair to heap (lazy deletion strategy)
-                heapq.heappush(heap, HeapItem(new_count, pair))
-                
-                # Update pair_to_sequences
-                if pair[0] == merged_token or pair[1] == merged_token:
-                    for token_seq, seq in sequences.items():
-                        for node, token1, token2 in seq.get_pairs():
-                            if (token1, token2) == pair:
-                                pair_to_sequences[pair].add(token_seq)
-        
-        merge_iteration += 1
-        
-        # Report progress periodically
         current_time = time.time()
         if current_time - last_report_time >= 10:  # Report every 10 seconds
             elapsed = current_time - start_time
