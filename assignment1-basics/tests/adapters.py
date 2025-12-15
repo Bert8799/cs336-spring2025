@@ -85,11 +85,11 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    from cs336_basics.layers import SwiGLU
+    from cs336_basics.transformer_layers import SwiGLU
     swiglu = SwiGLU(d_model=d_model, d_ff=d_ff, device=w1_weight.device, dtype=w1_weight.dtype)
-    swiglu.w1.weight.data = w1_weight
-    swiglu.w2.weight.data = w2_weight
-    swiglu.w3.weight.data = w3_weight
+    swiglu.w1.weights.data = w1_weight
+    swiglu.w2.weights.data = w2_weight
+    swiglu.w3.weights.data = w3_weight
     return swiglu(in_features)
 
 
@@ -153,10 +153,10 @@ def run_multihead_self_attention(
         device=q_proj_weight.device, 
         dtype=q_proj_weight.dtype
     )
-    mha.query_linear.weight.data = q_proj_weight
-    mha.key_linear.weight.data = k_proj_weight
-    mha.value_linear.weight.data = v_proj_weight
-    mha.out_linear.weight.data = o_proj_weight
+    mha.query_linear.weights.data = q_proj_weight
+    mha.key_linear.weights.data = k_proj_weight
+    mha.value_linear.weights.data = v_proj_weight
+    mha.out_linear.weights.data = o_proj_weight
     return mha(in_features)
 
 
@@ -202,8 +202,7 @@ def run_multihead_self_attention_with_rope(
         theta=theta,
         d_k=d_model // num_heads,
         max_seq_len=max_seq_len,
-        device=q_proj_weight.device,
-        dtype=q_proj_weight.dtype,
+        device=q_proj_weight.device
     )
     mha = MultiHeadSelfAttention(
         d_model=d_model,
@@ -212,10 +211,10 @@ def run_multihead_self_attention_with_rope(
         device=q_proj_weight.device,
         dtype=q_proj_weight.dtype
     )
-    mha.query_linear.weight.data = q_proj_weight
-    mha.key_linear.weight.data = k_proj_weight
-    mha.value_linear.weight.data = v_proj_weight
-    mha.out_linear.weight.data = o_proj_weight
+    mha.query_linear.weights.data = q_proj_weight
+    mha.key_linear.weights.data = k_proj_weight
+    mha.value_linear.weights.data = v_proj_weight
+    mha.out_linear.weights.data = o_proj_weight
     return mha(in_features, token_positions)
 
 
@@ -243,8 +242,7 @@ def run_rope(
         theta=theta,
         d_k=d_k,
         max_seq_len=max_seq_len,
-        device=in_query_or_key.device,
-        dtype=in_query_or_key.dtype,
+        device=in_query_or_key.device
     )
     return rope(in_query_or_key, token_positions)
 
@@ -324,8 +322,7 @@ def run_transformer_block(
         theta=theta,
         d_k=d_model // num_heads,
         max_seq_len=max_seq_len,
-        device=in_features.device,
-        dtype=in_features.dtype,
+        device=in_features.device
     )
     block = TransformerBlock(
         d_model=d_model,
@@ -334,15 +331,15 @@ def run_transformer_block(
         rope=rope,
         device=in_features.device,
     )
-    block.attention.query_linear.weight.data = weights["attn.q_proj.weight"]
-    block.attention.key_linear.weight.data = weights["attn.k_proj.weight"]
-    block.attention.value_linear.weight.data = weights["attn.v_proj.weight"]
-    block.attention.out_linear.weight.data = weights["attn.output_proj.weight"]
-    block.norm1.weight.data = weights["ln1.weight"]
-    block.feed_forward.w1.weight.data = weights["ffn.w1.weight"]
-    block.feed_forward.w2.weight.data = weights["ffn.w2.weight"]
-    block.feed_forward.w3.weight.data = weights["ffn.w3.weight"]
-    block.norm2.weight.data = weights["ln2.weight"]
+    block.attention.query_linear.weights.data = weights["attn.q_proj.weight"]
+    block.attention.key_linear.weights.data = weights["attn.k_proj.weight"]
+    block.attention.value_linear.weights.data = weights["attn.v_proj.weight"]
+    block.attention.out_linear.weights.data = weights["attn.output_proj.weight"]
+    block.norm1.scale.data = weights["ln1.weight"]
+    block.feed_forward.w1.weights.data = weights["ffn.w1.weight"]
+    block.feed_forward.w2.weights.data = weights["ffn.w2.weight"]
+    block.feed_forward.w3.weights.data = weights["ffn.w3.weight"]
+    block.norm2.scale.data = weights["ln2.weight"]
     return block(in_features)
 
 
@@ -370,7 +367,7 @@ def run_transformer_lm(
         num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
             evenly divisible by `num_heads`.
         d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
-        rope_theta (float): The RoPE $\Theta$ parameter.
+        rope_theta (float): The RoPE $Theta$ parameter.
         weights (dict[str, Tensor]):
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
@@ -440,17 +437,17 @@ def run_transformer_lm(
     model.embedding.embedding_weights.data = weights["token_embeddings.weight"]
     for layer_idx in range(num_layers):
         layer = model.layers[layer_idx]
-        layer.attention.query_linear.weight.data = weights[f"layers.{layer_idx}.attn.q_proj.weight"]
-        layer.attention.key_linear.weight.data = weights[f"layers.{layer_idx}.attn.k_proj.weight"]
-        layer.attention.value_linear.weight.data = weights[f"layers.{layer_idx}.attn.v_proj.weight"]
-        layer.attention.out_linear.weight.data = weights[f"layers.{layer_idx}.attn.output_proj.weight"]
-        layer.norm1.weight.data = weights[f"layers.{layer_idx}.ln1.weight"]
-        layer.feed_forward.w1.weight.data = weights[f"layers.{layer_idx}.ffn.w1.weight"]
-        layer.feed_forward.w2.weight.data = weights[f"layers.{layer_idx}.ffn.w2.weight"]
-        layer.feed_forward.w3.weight.data = weights[f"layers.{layer_idx}.ffn.w3.weight"]
-        layer.norm2.weight.data = weights[f"layers.{layer_idx}.ln2.weight"]
-    model.norm.weight.data = weights["ln_final.weight"]
-    model.output_linear.weight.data = weights["lm_head.weight"]
+        layer.attention.query_linear.weights.data = weights[f"layers.{layer_idx}.attn.q_proj.weight"]
+        layer.attention.key_linear.weights.data = weights[f"layers.{layer_idx}.attn.k_proj.weight"]
+        layer.attention.value_linear.weights.data = weights[f"layers.{layer_idx}.attn.v_proj.weight"]
+        layer.attention.out_linear.weights.data = weights[f"layers.{layer_idx}.attn.output_proj.weight"]
+        layer.norm1.scale.data = weights[f"layers.{layer_idx}.ln1.weight"]
+        layer.feed_forward.w1.weights.data = weights[f"layers.{layer_idx}.ffn.w1.weight"]
+        layer.feed_forward.w2.weights.data = weights[f"layers.{layer_idx}.ffn.w2.weight"]
+        layer.feed_forward.w3.weights.data = weights[f"layers.{layer_idx}.ffn.w3.weight"]
+        layer.norm2.scale.data = weights[f"layers.{layer_idx}.ln2.weight"]
+    model.norm.scale.data = weights["ln_final.weight"]
+    model.output_linear.weights.data = weights["lm_head.weight"]
     return model(in_indices)
 
 

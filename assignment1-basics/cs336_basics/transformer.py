@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
-from einops import rearrange
-from .layers import RMSNorm
+from .layers import RMSNorm, Embedding, Linear
 from .transformer_layers import SwiGLU, RotaryPositionEmbedding, MultiHeadSelfAttention
 
 
@@ -58,7 +57,7 @@ class TransformerLM(nn.Module):
         if d_model % num_heads != 0:
             raise ValueError("d_model must be divisible by num_heads.")
         
-        self.embedding = nn.Embedding(vocab_size, d_model, device=device, dtype=dtype)
+        self.embedding = Embedding(vocab_size, d_model, device=device, dtype=dtype)
         self.position_embedding = RotaryPositionEmbedding(
             theta=theta,
             d_k=d_model // num_heads,
@@ -75,7 +74,7 @@ class TransformerLM(nn.Module):
             ) for _ in range(num_layers)
         ])
         self.norm = RMSNorm(d_model=d_model)
-        self.output_linear = nn.Linear(d_model, vocab_size, device=device, dtype=dtype)
+        self.output_linear = Linear(d_model, vocab_size, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor, token_position: torch.Tensor | None = None) -> torch.Tensor:
         batch_size, seq_len = x.size()

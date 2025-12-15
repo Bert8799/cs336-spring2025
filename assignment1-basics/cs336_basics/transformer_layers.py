@@ -58,7 +58,7 @@ class RotaryPositionEmbedding(nn.Module):
 
         freqs = 1.0 / (self.theta ** (torch.arange(0, d_k, 2, device=device) / d_k)) # (d_k//2)
         position = torch.arange(0, max_seq_len, device=device) # (max_seq_len)
-        sinusoidal_inp = einsum("i,j->ij", position, freqs) # (max_seq_len, d_k//2)
+        sinusoidal_inp = einsum(position, freqs, "i, j->i j") # (max_seq_len, d_k//2)
 
         self.register_buffer("sin_cache", torch.sin(sinusoidal_inp), persistent=False)
         self.register_buffer("cos_cache", torch.cos(sinusoidal_inp), persistent=False)
@@ -75,9 +75,9 @@ class RotaryPositionEmbedding(nn.Module):
             dim=-2
         )
 
-        x_pair = rearrange(x, "... (d_pair 2) -> ... d_pair 2", d_pair=self.d_k // 2)
-        x_rotated = einsum("... i j, ... j -> ... i", rotate_matrix, x_pair)
-        out = rearrange(x_rotated, "... d_pair 2 -> ... (d_pair 2)", d_pair=self.d_k // 2)
+        x_pair = rearrange(x, "... (d_pair two) -> ... d_pair two", two=2)
+        x_rotated = einsum(rotate_matrix, x_pair, "... i j, ... j -> ... i")
+        out = rearrange(x_rotated, "... d_pair two -> ... (d_pair two)", two=2)
 
         return out.to(dtype)
     
@@ -92,13 +92,13 @@ def scaled_dot_product_attention(
     Scaled Dot-Product Attention mechanism.
     """
     d_k = query.size(-1)
-    scores = einsum("...seq_q d_k, ...seq_k d_k -> ... seq_q seq_k", query, key) / (d_k ** 0.5)
+    scores = einsum(query, key, "... seq_q d_k, ... seq_k d_k -> ... seq_q seq_k") / (d_k ** 0.5)
 
     if mask is not None:
         scores = scores.masked_fill(mask == 0, float('-inf'))
 
     attn_weights = softmax(scores, dim=-1)
-    output = einsum("... seq_q seq_k, ... seq_k d_v -> ... seq_q d_v", attn_weights, value)
+    output = einsum(attn_weights, value, "... seq_q seq_k, ... seq_k d_v -> ... seq_q d_v")
 
     return output
 
@@ -125,10 +125,10 @@ class MultiHeadSelfAttention(nn.Module):
         self.device = device
         self.dtype = dtype
 
-        self.query_linear = nn.Linear(d_model, d_model, device=device, dtype=dtype)
-        self.key_linear = nn.Linear(d_model, d_model, device=device, dtype=dtype)
-        self.value_linear = nn.Linear(d_model, d_model, device=device, dtype=dtype)
-        self.out_linear = nn.Linear(d_model, d_model, device=device, dtype=dtype)
+        self.query_linear = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.key_linear = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.value_linear = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.out_linear = Linear(d_model, d_model, device=device, dtype=dtype)
 
     def forward(
         self,

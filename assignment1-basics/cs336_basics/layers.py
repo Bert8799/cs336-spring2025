@@ -31,7 +31,7 @@ class Linear(nn.Module):
         nn.init.trunc_normal_(self.weights, mean=0.0, std=std, a=-3*std, b=3*std)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return einsum("... i, j i -> ... j", x, self.weights)
+        return einsum(x, self.weights, "... i, j i -> ... j")
     
 
 class Embedding(nn.Module):
