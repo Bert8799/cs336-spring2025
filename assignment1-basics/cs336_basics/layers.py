@@ -94,6 +94,10 @@ class RMSNorm(nn.Module):
         return x_norm.to(dtype)
 
 
+def silu(x: torch.Tensor) -> torch.Tensor:
+        return x * torch.sigmoid(x)
+
+
 def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     """
     Stable softmax implementation.

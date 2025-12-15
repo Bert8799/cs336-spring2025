@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from .layers import softmax, Linear
+from .layers import silu, softmax, Linear
 from einops import einsum, rearrange
 
 
@@ -29,14 +29,11 @@ class SwiGLU(nn.Module):
         self.w1 = Linear(d_model, d_ff, device=device, dtype=dtype)
         self.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
         self.w3 = Linear(d_model, d_ff, device=device, dtype=dtype)
-    
-    def silu(self, x: torch.Tensor) -> torch.Tensor:
-        return x * torch.sigmoid(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x1 = self.w1(x)
         x2 = self.w3(x)
-        return self.w2(self.silu(x1) * x2)
+        return self.w2(silu(x1) * x2)
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -148,7 +145,7 @@ class MultiHeadSelfAttention(nn.Module):
         key = rearrange(key, "b seq (h d_k) -> b h seq d_k", h=self.num_heads)
         value = rearrange(value, "b seq (h d_k) -> b h seq d_k", h=self.num_heads)
 
-        if token_position is None:
+        if self.rope is not None and token_position is None:
             token_position = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
 
         if self.rope is not None:
