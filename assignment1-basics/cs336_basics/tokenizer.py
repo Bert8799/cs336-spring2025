@@ -1,7 +1,7 @@
 import regex as re
 from array import array
 from typing import Iterable, Iterator
-from .train_bpe import load_bpe_files, GPT2_PATTERN
+from .train_bpe import load_bpe, GPT2_PATTERN
 
 
 class Tokenizer:
@@ -17,8 +17,14 @@ class Tokenizer:
         """
         self.vocab = vocab
         self.merges = merges
-        self.special_tokens = special_tokens if special_tokens else []
+        if special_tokens:
+            self.special_tokens = sorted(special_tokens, key=len, reverse=True)
+            self.special_pattern = f"({'|'.join(re.escape(s) for s in self.special_tokens)})"
+        else:
+            self.special_tokens = []
+            self.special_pattern = ""
 
+        self.encode_cache = {}
         self.vocab_inv = {v: k for k, v in vocab.items()}
         self.merges_rank = {pair: rank for rank, pair in enumerate(merges)}
 
@@ -42,7 +48,7 @@ class Tokenizer:
         (in the same format that your BPE training code output) 
         and (optionally) a list of special tokens. 
         """
-        vocab, merges = load_bpe_files(vocab_filepath, merges_filepath)
+        vocab, merges = load_bpe(vocab_filepath, merges_filepath)
         return cls(vocab, merges, special_tokens)
     
     def _encode_without_special_tokens(self, text: str) -> list[int]:
@@ -54,7 +60,12 @@ class Tokenizer:
         token_ids = array('H')
 
         for match in GPT2_PATTERN.finditer(text):
-            word = match.group(0).encode("utf-8")
+            word = match.group(0)
+            if word in self.encode_cache:
+                token_ids.extend(self.encode_cache[word])
+                continue
+
+            word_bytes = [bytes([b]) for b in word.encode("utf-8")]
 
             while True:
                 # Find the highest-ranked pair
@@ -62,8 +73,8 @@ class Tokenizer:
                 best_pair = None
                 merged = None
 
-                for i in range(len(word) - 1):
-                    pair = (word[i:i+1], word[i+1:i+2])
+                for i in range(len(word_bytes) - 1):
+                    pair = (word_bytes[i], word_bytes[i+1])
                     if pair in self.merges_rank:
                         rank = self.merges_rank.get(pair, float('inf'))
                         if rank < min_rank:
@@ -74,11 +85,11 @@ class Tokenizer:
                 if best_pair is None:
                     break
 
-                word = (
-                    word[:best_pair] + merged + word[best_pair + 2:]
-                )
-
-            token_ids.extend(self.vocab_inv[b] for b in word)
+                word_bytes = word_bytes[:best_pair] + [merged] + word_bytes[best_pair + 2:]
+            
+            token_id = [self.vocab_inv[token] for token in word_bytes]
+            self.encode_cache[word] = token_id
+            token_ids.extend(token_id)
 
         return token_ids.tolist()
 
@@ -87,11 +98,8 @@ class Tokenizer:
         """Encode an input text into a sequence of token IDs."""
         if self.special_tokens == []:
             return self._encode_without_special_tokens(text)
-
-        special_tokens = sorted(self.special_tokens, key=len, reverse=True)
-
-        special_pattern = f"({'|'.join(re.escape(s) for s in special_tokens)})"
-        text_parts = re.split(special_pattern, text)
+        
+        text_parts = re.split(self.special_pattern, text)
 
         token_ids = []
         for part in text_parts:
