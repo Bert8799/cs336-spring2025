@@ -5,6 +5,7 @@ import multiprocessing as mp
 import time
 import heapq
 from collections import defaultdict
+from tqdm import tqdm
 
 
 GPT2_PATTERN = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
@@ -95,7 +96,7 @@ def pre_tokenize_chunk(
 
     Example:
     >>> chunk = "Hello, world!<|endoftext|>"
-    >>> special_pattern = re.compile(r"<\|endoftext\|>")
+    >>> special_pattern = re.compile(r"<|endoftext|>")
     >>> pre_tokenize_chunk(chunk, special_pattern)
     {
         (b'H', b'e', b'l', b'l', b'o'): 1,
@@ -126,7 +127,7 @@ def pre_tokenize(
     Returns a dictionary mapping tokens (as bytes) to their counts.
     """
     num_processes = mp.cpu_count()
-    ctx = mp.get_context("spawn")
+    ctx = mp.get_context("fork")
     pool = ctx.Pool(processes=num_processes)
 
     special_pattern = None
@@ -227,11 +228,12 @@ def train_bpe(
 
     # Create vocabulary with initial tokens
     vocab = {i: token for i, token in enumerate(initial_tokens)}
-    print(f"Initial vocabulary size: {len(vocab)}")
     
     # Pre-tokenize the input file to get token frequencies
+    current_time = time.time()
     token_counts = pre_tokenize(input_path, special_tokens)
-    print(f"Number of unique pre-tokens: {len(token_counts)}")
+    print(f"\nPre-tokenization time: {time.time() - current_time:.2f}s")
+    print(f"Pre-tokens size: {len(token_counts)}")
 
     # Get the initial pairs and their counts
     pair_counts: dict[tuple[bytes, bytes], int] = defaultdict(int)
@@ -243,15 +245,15 @@ def train_bpe(
             pair_to_tokens[pair].add(token_tuple)
     
     # Create a max-heap of pairs based on their counts
-    heap: list[HeapItem] = []
-    for pair, count in pair_counts.items():
-        heapq.heappush(heap, HeapItem(count, pair))
+    heap: list[HeapItem] = [HeapItem(count, pair) for pair, count in pair_counts.items()]
+    heapq.heapify(heap)
 
     # Merge tokens until reaching the desired vocabulary size
     merges: list[tuple[bytes, bytes]] = []
     num_merges = vocab_size - len(vocab)
-    last_report_time = time.time()
     
+    current_time = time.time()
+    pbar = tqdm(total=num_merges, desc="Merging tokens", unit="merge")
     while len(vocab) < vocab_size:
         if not heap:
             print("No more pairs to merge.")
@@ -263,10 +265,6 @@ def train_bpe(
             current_count = pair_counts.get(top_item.pair, 0)
             if current_count == top_item.count:
                 break
-            
-            # If counts don't match, but the pair still exists, push updated count
-            if top_item.pair in pair_counts and current_count > 0:
-                heapq.heappush(heap, HeapItem(current_count, top_item.pair))
         else:
             print("No valid pairs left to merge.")
             break
@@ -279,18 +277,14 @@ def train_bpe(
         for affected_pair in affected_pairs:
             if affected_pair in pair_counts and pair_counts[affected_pair] > 0:
                 heapq.heappush(heap, HeapItem(pair_counts[affected_pair], affected_pair))
-        
-        current_time = time.time()
-        if current_time - last_report_time >= 10:  # Report every 10 seconds
-            elapsed = current_time - start_time
-            progress = len(merges) / num_merges * 100
-            print(f"Progress: {len(merges)}/{num_merges} merges ({progress:.1f}%), "
-                  f"Elapsed: {elapsed:.1f}s, Vocab size: {len(vocab)}")
-            last_report_time = current_time
-    
+        pbar.update(1)
+    pbar.close()
+
+    print(f"Merges time: {time.time() - current_time:.2f}s")
+
     total_time = time.time() - start_time
-    print(f"Training complete! Total time: {total_time:.2f}s")
-    print(f"Final vocabulary size: {len(vocab)}")
+    print(f"Training time: {total_time:.2f}s")
+    print(f"Vocabulary size: {len(vocab)}")
     print(f"Number of merges: {len(merges)}")
     
     # Save merges and vocabulary
