@@ -6,6 +6,7 @@ import time
 import heapq
 from collections import defaultdict
 from tqdm import tqdm
+import yaml
 
 
 GPT2_PATTERN = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
@@ -205,7 +206,28 @@ def merge(
     pair_to_tokens[pair].clear()
 
     return affected_pairs
-    
+
+
+def load_bpe(
+    merge_path: str,
+    vocab_path: str
+) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+    """
+    Load a BPE tokenizer from the given merge and vocabulary files.
+    Returns the vocabulary and the list of merges.
+    """
+    with open(merge_path, 'r', encoding='utf-8') as f:
+        merges_yaml = f.read()
+        merges_list = yaml.safe_load(merges_yaml)
+        merges = [(a.encode('utf-8'), b.encode('utf-8')) for a, b in merges_list]
+
+    with open(vocab_path, 'r', encoding='utf-8') as f:
+        vocab_yaml = f.read()
+        vocab_dict = yaml.safe_load(vocab_yaml)
+        vocab = {int(k): v.encode('utf-8') for k, v in vocab_dict.items()}
+
+    return vocab, merges
+
 
 def train_bpe(
     input_path: str,
@@ -290,17 +312,22 @@ def train_bpe(
     # Save merges and vocabulary
     if merge_outpath:
         with open(merge_outpath, 'w', encoding='utf-8') as f:
-            for pair in merges:
-                token1 = pair[0].decode('utf-8', errors='replace')
-                token2 = pair[1].decode('utf-8', errors='replace')
-                f.write(f"{token1} {token2}\n")
+            merges_yaml = yaml.dump(
+                [ 
+                    [a.decode('utf-8', errors='replace'), 
+                     b.decode('utf-8', errors='replace')] 
+                    for a, b in merges
+                ], 
+                allow_unicode=True)
+            f.write(merges_yaml)
         print(f"Merges saved to {merge_outpath}")
     
     if vocab_outpath:
         with open(vocab_outpath, 'w', encoding='utf-8') as f:
-            for idx, token in sorted(vocab.items()):
-                token_str = token.decode('utf-8', errors='replace')
-                f.write(f"{idx}\t{token_str}\n")
+            vocab_yaml = yaml.dump(
+                {k: v.decode('utf-8', errors='replace') for k, v in vocab.items()},
+                allow_unicode=True)
+            f.write(vocab_yaml)
         print(f"Vocabulary saved to {vocab_outpath}")
     
     return vocab, merges
