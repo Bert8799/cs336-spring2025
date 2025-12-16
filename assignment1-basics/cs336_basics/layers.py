@@ -95,7 +95,7 @@ class RMSNorm(nn.Module):
 
 
 def silu(x: torch.Tensor) -> torch.Tensor:
-        return x * torch.sigmoid(x)
+    return x * torch.sigmoid(x)
 
 
 def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:

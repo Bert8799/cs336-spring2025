@@ -1,6 +1,8 @@
 import regex as re
 from array import array
 from typing import Iterable, Iterator
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
 from .train_bpe import load_bpe, GPT2_PATTERN
 
 
@@ -123,3 +125,17 @@ class Tokenizer:
         """Decode a sequence of token IDs into text."""
         text_bytes = b"".join(self.vocab[id] for id in ids)
         return text_bytes.decode("utf-8", errors="replace")
+    
+
+class HuggingFaceTokenizer:
+    @classmethod
+    def from_files(
+        cls, 
+        input_path: str,
+    ):
+        """
+        Class method that constructs and return a HuggingFace Tokenizer 
+        from a serialized tokenizer.json file.
+        """
+        tokenizer = Tokenizer(BPE.from_file(input_path))
+        return tokenizer
