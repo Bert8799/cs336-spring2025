@@ -570,7 +570,7 @@ def get_adamw_cls() -> Any:
     Returns a torch.optim.Optimizer that implements AdamW.
     """
     from cs336_basics.optim import AdamW
-    return AdamW()
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
@@ -647,7 +647,7 @@ def run_load_checkpoint(
         int: the previously-serialized number of iterations.
     """
     from cs336_basics.utils import load_checkpoint
-    return load_checkpoint(src, model, optimizer)
+    return load_checkpoint(model, optimizer, src)
 
 
 def get_tokenizer(

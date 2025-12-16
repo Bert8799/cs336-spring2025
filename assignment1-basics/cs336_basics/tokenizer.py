@@ -1,9 +1,10 @@
+import yaml
 import regex as re
+from tqdm import tqdm
 from array import array
 from typing import Iterable, Iterator
-from tokenizers import Tokenizer
-from tokenizers.models import BPE
-from .train_bpe import load_bpe, GPT2_PATTERN
+from tokenizers import Tokenizer as HFTokenizer
+from .train_bpe import GPT2_PATTERN
 
 
 class Tokenizer:
@@ -41,7 +42,7 @@ class Tokenizer:
     def from_files(
         cls, 
         vocab_filepath: str, 
-        merges_filepath: str, 
+        merge_filepath: str, 
         special_tokens: list[str] | None = None
     ):
         """
@@ -50,7 +51,15 @@ class Tokenizer:
         (in the same format that your BPE training code output) 
         and (optionally) a list of special tokens. 
         """
-        vocab, merges = load_bpe(vocab_filepath, merges_filepath)
+        with open(merge_filepath, 'r', encoding='utf-8') as f:
+            merges_yaml = f.read()
+            merges_list = yaml.safe_load(merges_yaml)
+            merges = [(a.encode('utf-8'), b.encode('utf-8')) for a, b in merges_list]
+
+        with open(vocab_filepath, 'r', encoding='utf-8') as f:
+            vocab_yaml = f.read()
+            vocab_dict = yaml.safe_load(vocab_yaml)
+            vocab = {int(k): v.encode('utf-8') for k, v in vocab_dict.items()}
         return cls(vocab, merges, special_tokens)
     
     def _encode_without_special_tokens(self, text: str) -> list[int]:
@@ -127,15 +136,37 @@ class Tokenizer:
         return text_bytes.decode("utf-8", errors="replace")
     
 
-class HuggingFaceTokenizer:
-    @classmethod
-    def from_files(
-        cls, 
+class HuggingFaceTokenizer():
+    def __init__(self, model_filepath: str):
+        """
+        Construct a HuggingFace Tokenizer from a serialized tokenizer.json file.
+        """
+        self.tokenizer = HFTokenizer.from_file(model_filepath)
+
+    def encode_lines(
+        self, 
         input_path: str,
-    ):
-        """
-        Class method that constructs and return a HuggingFace Tokenizer 
-        from a serialized tokenizer.json file.
-        """
-        tokenizer = Tokenizer(BPE.from_file(input_path))
-        return tokenizer
+        batch_lines: int = 10000,
+    ) -> list[int]:
+        """Encode lines from a file into a list of token IDs."""
+        token_ids = []
+        with open(input_path, "r", encoding="utf-8") as f:
+            batch = []
+            for line in tqdm(f, desc="Tokenizing lines"):
+                line = line.strip()
+                if not line:
+                    continue
+                batch.append(line)
+                if len(batch) >= batch_lines:
+                    encs = self.tokenizer.encode_batch(batch)
+                    batch.clear()
+                    for enc in encs:
+                        token_ids.extend(enc.ids)
+            if batch:
+                encs = self.tokenizer.encode_batch(batch)
+                batch.clear()
+                for enc in encs:
+                    token_ids.extend(enc.ids)
+
+        return token_ids
+    

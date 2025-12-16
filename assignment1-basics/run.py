@@ -1,7 +1,7 @@
 import torch
 import numpy as np
-from cs336_basics.train_bpe import train_bpe, hf_train_bpe
-from cs336_basics.tokenizer import Tokenizer, HuggingFaceTokenizer
+from cs336_basics.train_bpe import hf_train_bpe
+from cs336_basics.tokenizer import HuggingFaceTokenizer
 from cs336_basics.solver import Solver
 from cs336_basics.transformer import TransformerLM
 from cs336_basics.parser import parse_args
@@ -13,59 +13,42 @@ def run_train_bpe(
     special_tokens,
     merge_outpath=None,
     vocab_outpath=None,
+    model_outpath=None,
     type: str = "custom" or "hf" or None,
 ) -> tuple[dict[int, str], list[tuple[bytes, bytes]]]:
     if type is None:
         raise ValueError("Type must be specified as 'custom' or 'hf'.")
-    elif type == "custom":
-        return train_bpe(
-            input_path=input_path,
-            vocab_size=vocab_size,
-            special_tokens=special_tokens,
-            merge_outpath=merge_outpath,
-            vocab_outpath=vocab_outpath
-        )
     elif type == "hf":
         return hf_train_bpe(
             input_path=input_path,
             vocab_size=vocab_size,
             special_tokens=special_tokens,
             merge_outpath=merge_outpath,
-            vocab_outpath=vocab_outpath
+            vocab_outpath=vocab_outpath,
+            model_outpath=model_outpath
         )
 
 
 def run_tokenize_bpe(
     input_path: str,
-    vocab_filepath: str,
-    merges_filepath: str,
+    vocab_filepath: str | None = None,
+    merge_filepath: str | None = None,
+    model_filepath: str | None = None,
     type: str = "custom" or "hf" or None,
 ):
-    token_ids = None
     if type is None:
         raise ValueError("Type must be specified as 'custom' or 'hf'.")
     elif type == "hf":
-        tokenizer = HuggingFaceTokenizer.from_files(
-            vocab_filepath=vocab_filepath,
-            merges_filepath=merges_filepath
-        )
-        with open(input_path, 'r', encoding='utf-8') as f:
-            text = f.read()
-        token_ids = tokenizer.encode(text)
-    else:
-        tokenizer = Tokenizer.from_files(
-            vocab_filepath=vocab_filepath,
-            merges_filepath=merges_filepath
-        )
-        with open(input_path, 'r', encoding='utf-8') as f:
-            text = f.read()
-        token_ids = tokenizer.encode(text)
-    np.save(f"{input_path}.npy", np.array(token_ids, dtype=np.uint16))
+        tokenizer = HuggingFaceTokenizer(model_filepath=model_filepath)
+        token_ids = tokenizer.encode_lines(input_path)
+
+        np.save(f"{input_path}.npy", np.array(token_ids, dtype=np.uint16))
 
 
 def run_train_lm():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
 
     model = TransformerLM(
         vocab_size=args.vocab_size,
@@ -77,10 +60,11 @@ def run_train_lm():
         theta=args.rope_theta,
         device=device
     )
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
 
-    # Load your training and test data here
     train_data = np.memmap(f'{args.data_path}/train.npy', dtype=np.uint16, mode='r')
     test_data = np.memmap(f'{args.data_path}/test.npy', dtype=np.uint16, mode='r')
+    print("Data loaded.")
 
     solver = Solver(
         model=model,
@@ -88,7 +72,7 @@ def run_train_lm():
         test_data=test_data,
         batch_size=args.batch_size,
         context_length=args.context_length,
-        num_epochs=args.num_epochs,
+        iterations=args.iterations,
         max_lr=args.max_lr,
         min_lr=args.min_lr,
         warmup_iters=args.warmup_iters,
@@ -96,11 +80,17 @@ def run_train_lm():
         grad_clip=args.grad_clip,
         weight_decay=args.weight_decay,
         device=device,
-        print_every=args.print_every
+        validation=args.validation,
+        val_every=args.val_every,
+        val_iters=args.val_iters,
+        save_every=args.save_every,
+        out_path=args.out_path
     )
 
+    print("Starting training.")
     solver.train()
+    print("Training completed.")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     run_train_lm()

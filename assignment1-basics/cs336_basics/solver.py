@@ -13,24 +13,26 @@ class Solver:
         test_data: np.ndarray | None = None,
         batch_size: int = 64,
         context_length: int = 256,
-        num_epochs: int = 2,
+        iterations: int = 20_000,
         max_lr: float = 1e-3,
         min_lr: float = 1e-5,
         warmup_iters: int = 1000,
-        cosine_iters: int = 10000,
+        cosine_iters: int = 10_000,
         grad_clip: float | None = None,
         weight_decay: float = 0.0,
         device: torch.device = torch.device("cpu"),
-        verbose: bool = True,
-        print_every: int = 100,
-        out: str = './results'
+        validation: bool = True,
+        val_every: int = 100,
+        val_iters: int = 50,
+        save_every: int = 1000,
+        out_path: str | None = None
     ):
         self.model = model.to(device)
         self.train_data = train_data
         self.test_data = test_data
         self.batch_size = batch_size
         self.context_length = context_length
-        self.num_epochs = num_epochs
+        self.iterations = iterations
         self.max_lr = max_lr
         self.min_lr = min_lr
         self.warmup_iters = warmup_iters
@@ -38,9 +40,11 @@ class Solver:
         self.grad_clip = grad_clip
         self.weight_decay = weight_decay
         self.device = device
-        self.verbose = verbose
-        self.print_every = print_every
-        self.out = out
+        self.validation = validation
+        self.val_every = val_every
+        self.val_iters = val_iters
+        self.save_every = save_every
+        self.out_path = out_path
 
         self.learning_rate = max_lr
 
@@ -80,11 +84,10 @@ class Solver:
     @torch.no_grad()
     def eval(self):
         self.model.eval()
-        num_test = self.test_data.shape[0]
-        num_iterations = max(num_test // self.batch_size, 1)
-        total_loss = 0.0
 
-        for _ in range(num_iterations):
+        total_loss = 0.0
+        iter_bar = tqdm(range(self.val_iters))
+        for t in iter_bar:
             inputs, targets = get_batch(
                 self.test_data,
                 batch_size=self.batch_size,
@@ -93,21 +96,17 @@ class Solver:
             )
             
             logits = self.model(inputs)
-            loss = cross_entropy_loss(logits, targets)
-            total_loss += loss.item()
-
-        avg_loss = total_loss / num_iterations
+            loss = cross_entropy_loss(logits, targets).detach().cpu().numpy()
+            total_loss += loss
+            iter_bar.set_description(f"Iter {t+1}/{self.val_iters}, Test Loss: {loss:.3f}")
+        avg_loss = total_loss / self.val_iters
         self.test_loss_history.append(avg_loss)
 
         self.model.train()
-        return avg_loss
 
     def train(self):
-        num_train = self.data.shape[0]
-        iterations_per_epoch = max(num_train // self.batch_size, 1)
-        num_iterations = self.num_epochs * iterations_per_epoch
-
-        for t in range(num_iterations):
+        iter_bar = tqdm(range(self.iterations))
+        for t in iter_bar:
             self.learning_rate = lr_cosine_scheduler(
                 it=t,
                 max_lr=self.max_lr,
@@ -120,38 +119,29 @@ class Solver:
 
             self._step()
 
-            if self.verbose and (t + 1) % self.print_every == 0:
-                avg_loss = np.mean(self.train_loss_history[-self.print_every:])
-                print(f"Iteration {t + 1}/{num_iterations}, Train Loss: {avg_loss:.4f}", end='')
+            train_loss = self.train_loss_history[-1]
 
-                if self.test_data is not None:
-                    test_loss = self.eval()
-                    print(f", Test Loss: {test_loss:.4f}")
-                else:
-                    print()
-            
-            if (t + 1) % (10 * self.print_every) == 0:
+            if self.validation and (t + 1) % self.val_every == 0:
+                self.eval()
+
+            iter_bar.set_description(    
+                f"Iter {t + 1}/{self.iterations}, Train Loss: {train_loss:.3f}"
+            )
+
+            if self.out_path is not None and (
+                (t + 1) % self.save_every == 0 or t + 1 == self.iterations
+            ):
                 save_checkpoint(
                     model=self.model,
                     optimizer=self.optim,
                     iteration=t + 1,
-                    out=f'{self.out}/checkpoint_iter_{t + 1}.pt'
+                    out=f"{self.out_path}/checkpoint_iter_{t + 1}.pt"
                 )
 
-        print(f"\nTrain Loss: {self.train_loss_history[-1]:.4f}", end='')
-        if self.test_data is not None:
-            test_loss = self.eval()
-            print(f", Test Loss: {test_loss:.4f}")
-        else:
-            print()
-
-        torch.save({'model_state_dict': self.model.state_dict(),}, f'{self.out}/final_model.pt')
-
-    def load(self, path: str):
-        load_checkpoint(
+    def load(self, path: str) -> int:
+        return load_checkpoint(
             model=self.model,
             optimizer=self.optim,
             path=path,
             device=self.device
         )
-

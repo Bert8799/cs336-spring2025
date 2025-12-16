@@ -213,27 +213,6 @@ def merge(
     return affected_pairs
 
 
-def load_bpe(
-    merge_path: str,
-    vocab_path: str
-) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-    """
-    Load a BPE tokenizer from the given merge and vocabulary files.
-    Returns the vocabulary and the list of merges.
-    """
-    with open(merge_path, 'r', encoding='utf-8') as f:
-        merges_yaml = f.read()
-        merges_list = yaml.safe_load(merges_yaml)
-        merges = [(a.encode('utf-8'), b.encode('utf-8')) for a, b in merges_list]
-
-    with open(vocab_path, 'r', encoding='utf-8') as f:
-        vocab_yaml = f.read()
-        vocab_dict = yaml.safe_load(vocab_yaml)
-        vocab = {int(k): v.encode('utf-8') for k, v in vocab_dict.items()}
-
-    return vocab, merges
-
-
 def train_bpe(
     input_path: str,
     vocab_size: int,
@@ -344,7 +323,7 @@ def hf_train_bpe(
     special_tokens: list[str] | None = None,
     merge_outpath: str | None = None,
     vocab_outpath: str | None = None,
-    output_path: str | None = None,
+    model_outpath: str | None = None,
 ):
     tokenizer = Tokenizer(BPE(unk_token="<unk>"))
     tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
@@ -360,11 +339,11 @@ def hf_train_bpe(
     print(f"Training completed in {end_time - start_time:.2f} seconds.")
 
     # get merges and vocab
-    model_file = "temp_tokenizer.json" if not output_path else output_path
+    model_file = "tokenizer.json" if model_outpath is None else model_outpath
     tokenizer.save(model_file)
     with open(model_file, "r", encoding="utf-8") as f:
         model_json = json.load(f)
-    if not output_path:
+    if model_outpath is None:
         os.remove(model_file)
     merges = model_json.get("model", {}).get("merges", [])
 
@@ -372,18 +351,11 @@ def hf_train_bpe(
 
     if merge_outpath:
         with open(merge_outpath, 'w', encoding='utf-8') as f:
-            merges_yaml = yaml.dump(
-                merges, 
-                allow_unicode=True, 
-                sort_keys=False)
-            f.write(merges_yaml)
+            for merge in merges:
+                f.write(f"{merge}\n")
         print(f"Merges saved to {merge_outpath}")
 
     if vocab_outpath:
         with open(vocab_outpath, 'w', encoding='utf-8') as f:
-            vocab_yaml = yaml.dump(
-                {k: v for v, k in vocab.items()},
-                allow_unicode=True,
-                sort_keys=True)
-            f.write(vocab_yaml)
+            json.dump(vocab, f, ensure_ascii=False, indent=2)
         print(f"Vocabulary saved to {vocab_outpath}")
