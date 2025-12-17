@@ -42,7 +42,7 @@ def run_tokenize_bpe(
         tokenizer = HuggingFaceTokenizer(model_filepath=model_filepath)
         token_ids = tokenizer.encode_lines(input_path)
 
-        np.save(f"{input_path}.npy", np.array(token_ids, dtype=np.uint16))
+        np.array(token_ids, dtype=np.uint16).tofile(f"{input_path}.bin")
 
 
 def run_train_lm():
@@ -62,13 +62,13 @@ def run_train_lm():
     )
     print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
 
-    train_data = np.memmap(f'{args.data_path}/train.npy', dtype=np.uint16, mode='r')
-    test_data = np.memmap(f'{args.data_path}/test.npy', dtype=np.uint16, mode='r')
+    # train_data = np.memmap(f'{args.data_path}/train.bin', dtype=np.uint16, mode='r')
+    test_data = np.memmap(f'{args.data_path}/test.bin', dtype=np.uint16, mode='r')
     print("Data loaded.")
 
     solver = Solver(
         model=model,
-        train_data=train_data,
+        train_data=None,
         test_data=test_data,
         batch_size=args.batch_size,
         context_length=args.context_length,
@@ -87,10 +87,17 @@ def run_train_lm():
         out_path=args.out_path
     )
 
-    print("Starting training.")
-    solver.train()
-    print("Training completed.")
+    solver.load(path=f"{args.out_path}/checkpoint_iter_20000.pt")
+    print("Checkpoint loaded.")
+
+    # print("Starting training.")
+    # solver.train()
+    # print("Training completed.")
+
+    solver.eval(is_test=True)
+    print("Evaluation completed.") # 1.440
 
 
 if __name__ == "__main__": 
     run_train_lm()
+

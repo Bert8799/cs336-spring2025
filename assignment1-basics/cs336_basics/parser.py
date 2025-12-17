@@ -66,10 +66,10 @@ def parse_args():
         "--validation", type=bool, default=True, help="Enable or disable validation"
     )
     parser.add_argument(
-        "--val_every", type=int, default=2000, help="Validate every N iterations"
+        "--val_every", type=int, default=200, help="Validate every N iterations"
     )
     parser.add_argument(
-        "--val_iters", type=int, default=200, help="Validate every N iterations"
+        "--val_iters", type=int, default=20, help="Validate every N iterations"
     )
 
     # Checkpoint arguments

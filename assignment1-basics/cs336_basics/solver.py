@@ -1,6 +1,7 @@
 import torch
-from tqdm import tqdm
 import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 from .optim import AdamW, lr_cosine_scheduler, gradient_clipping
 from .utils import cross_entropy_loss, get_batch, save_checkpoint, load_checkpoint
 
@@ -57,7 +58,7 @@ class Solver:
         self._reset()
 
     def _reset(self):
-        self.epoch = 0
+        self.t = 0
         self.train_loss_history = []
         self.test_loss_history = []
 
@@ -82,7 +83,7 @@ class Solver:
         self.optim.step()
 
     @torch.no_grad()
-    def eval(self):
+    def eval(self, is_test: bool = False):
         self.model.eval()
 
         total_loss = 0.0
@@ -96,16 +97,18 @@ class Solver:
             )
             
             logits = self.model(inputs)
-            loss = cross_entropy_loss(logits, targets).detach().cpu().numpy()
-            total_loss += loss
-            iter_bar.set_description(f"Iter {t+1}/{self.val_iters}, Test Loss: {loss:.3f}")
-        avg_loss = total_loss / self.val_iters
-        self.test_loss_history.append(avg_loss)
+            loss = cross_entropy_loss(logits, targets)
+            total_loss += loss.detach().cpu().numpy()
+            avg_loss = total_loss / (t + 1)
+            iter_bar.set_description(f"Iter {t+1}/{self.val_iters}, Test Loss: {avg_loss:.3f}")
+
+        if not is_test:
+            self.test_loss_history.append(avg_loss)
 
         self.model.train()
 
     def train(self):
-        iter_bar = tqdm(range(self.iterations))
+        iter_bar = tqdm(range(self.t, self.iterations))
         for t in iter_bar:
             self.learning_rate = lr_cosine_scheduler(
                 it=t,
@@ -138,10 +141,24 @@ class Solver:
                     out=f"{self.out_path}/checkpoint_iter_{t + 1}.pt"
                 )
 
-    def load(self, path: str) -> int:
-        return load_checkpoint(
+    def load(self, path: str):
+        self.t = load_checkpoint(
             model=self.model,
             optimizer=self.optim,
-            path=path,
+            checkpoint_path=path,
             device=self.device
         )
+
+    def plot_losses(self):
+        """Plots the training and test loss curves."""
+        plt.figure(figsize=(10, 5))
+        plt.plot(self.train_loss_history, label='Train Loss')
+        if self.validation:
+            val_x = np.arange(self.val_every - 1, self.iterations, self.val_every)
+            plt.plot(val_x, self.test_loss_history, label='Test Loss', marker='o')
+        plt.xlabel('Iterations')
+        plt.ylabel('Loss')
+        plt.title('Training and Test Loss over Iterations')
+        plt.legend()
+        plt.grid()
+        plt.savefig(f'{self.out_path}/loss_curve.png', dpi=300)
