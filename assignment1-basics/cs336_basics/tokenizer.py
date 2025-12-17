@@ -142,6 +142,11 @@ class HuggingFaceTokenizer():
         Construct a HuggingFace Tokenizer from a serialized tokenizer.json file.
         """
         self.tokenizer = HFTokenizer.from_file(model_filepath)
+    
+    def encode(self, text: str) -> list[int]:
+        """Encode an input text into a sequence of token IDs."""
+        encoding = self.tokenizer.encode(text)
+        return encoding.ids
 
     def encode_lines(
         self, 
@@ -169,4 +174,9 @@ class HuggingFaceTokenizer():
                     token_ids.extend(enc.ids)
 
         return token_ids
+    
+    def decode(self, ids: list[int]) -> str :
+        """Decode a sequence of token IDs into text."""
+        decoding = self.tokenizer.decode(ids)
+        return decoding
     

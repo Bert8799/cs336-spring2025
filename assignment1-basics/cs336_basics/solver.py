@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from .optim import AdamW, lr_cosine_scheduler, gradient_clipping
-from .utils import cross_entropy_loss, get_batch, save_checkpoint, load_checkpoint
+from .utils import cross_entropy_loss, top_p_sampling, get_batch, save_checkpoint, load_checkpoint
 
 
 class Solver:
@@ -83,7 +83,31 @@ class Solver:
         self.optim.step()
 
     @torch.no_grad()
-    def eval(self, is_test: bool = False):
+    def inference(
+        self,
+        input_ids: torch.Tensor,
+        output_length: int,
+        p: float = 0.9,
+        t: float = 1.0
+    ) -> torch.Tensor:
+        assert input_ids.dim() == 2, "input_ids should be of shape (1, seq_len)"
+        self.model.eval()
+        
+        generated_ids = input_ids.clone()
+        for _ in range(output_length):
+            if generated_ids.size(1) > self.context_length:
+                context_ids = generated_ids[:, -self.context_length:]
+            else:
+                context_ids = generated_ids
+            logits = self.model(context_ids)
+            next_ids = top_p_sampling(logits, p=p, t=t)
+            generated_ids = torch.cat([generated_ids, next_ids.unsqueeze(1)], dim=1)
+
+        self.model.train()
+        return generated_ids
+
+    @torch.no_grad()
+    def eval(self):
         self.model.eval()
 
         total_loss = 0.0
@@ -102,8 +126,7 @@ class Solver:
             avg_loss = total_loss / (t + 1)
             iter_bar.set_description(f"Iter {t+1}/{self.val_iters}, Test Loss: {avg_loss:.3f}")
 
-        if not is_test:
-            self.test_loss_history.append(avg_loss)
+        self.test_loss_history.append(avg_loss)
 
         self.model.train()
 

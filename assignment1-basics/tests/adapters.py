@@ -488,7 +488,7 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    from cs336_basics.layers import silu
+    from cs336_basics.utils import silu
     return silu(in_features)
 
 
@@ -529,7 +529,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    from cs336_basics.layers import softmax
+    from cs336_basics.utils import softmax
     return softmax(in_features, dim)
 
 

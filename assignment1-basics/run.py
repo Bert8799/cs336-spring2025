@@ -94,10 +94,52 @@ def run_train_lm():
     # solver.train()
     # print("Training completed.")
 
-    solver.eval(is_test=True)
+    solver.eval()
     print("Evaluation completed.") # 1.440
 
 
+def run_inference():    
+    args = parse_args()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = TransformerLM(
+        vocab_size=args.vocab_size,
+        d_model=args.d_model,
+        d_ff=args.d_ff,
+        context_length=args.context_length,
+        num_heads=args.num_heads,
+        num_layers=args.num_layers,
+        theta=args.rope_theta,
+        device=device
+    )
+
+    solver = Solver(
+        model=model,
+        train_data=None,
+        test_data=None,
+        device=device
+    )
+
+    solver.load(path=f"{args.out_path}/checkpoint_iter_20000.pt")
+
+    tokenizer = HuggingFaceTokenizer(model_filepath=args.tokenizer_model_path)
+    prompt = "Once upon a time"
+    input_ids = tokenizer.encode(prompt)
+    input_tensor = torch.tensor([input_ids], dtype=torch.long, device=device)
+
+    output_length = 50
+    generated_ids = solver.inference(
+        input_ids=input_tensor,
+        output_length=output_length,
+        p=0.9,
+        t=1.0
+    )
+
+    generated_ids = generated_ids[0].cpu().numpy().tolist()
+    generated_text = tokenizer.decode(generated_ids)
+    print("Generated Text:")
+    print(generated_text)
+
 if __name__ == "__main__": 
-    run_train_lm()
+    run_inference()
 

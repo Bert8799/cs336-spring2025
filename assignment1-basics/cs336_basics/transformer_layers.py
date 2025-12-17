@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
-from .layers import silu, softmax, Linear
 from einops import einsum, rearrange
+from .layers import Linear
+from .utils import silu, softmax
 
 
 class SwiGLU(nn.Module):

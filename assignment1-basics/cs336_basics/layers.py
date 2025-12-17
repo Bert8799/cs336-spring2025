@@ -92,17 +92,3 @@ class RMSNorm(nn.Module):
         rms = torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
         x_norm = (x / rms) * self.scale
         return x_norm.to(dtype)
-
-
-def silu(x: torch.Tensor) -> torch.Tensor:
-    return x * torch.sigmoid(x)
-
-
-def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
-    """
-    Stable softmax implementation.
-    """
-    x_max = torch.max(x, dim=dim, keepdim=True).values
-    x_exp = torch.exp(x - x_max)
-    x_exp_sum = torch.sum(x_exp, dim=dim, keepdim=True)
-    return x_exp / x_exp_sum

@@ -1,8 +1,23 @@
+import os
+import typing
 import torch
 import torch.nn as nn
 import numpy as np
-import os, typing
 from einops import rearrange
+
+
+def silu(x: torch.Tensor) -> torch.Tensor:
+    return x * torch.sigmoid(x)
+
+
+def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
+    """
+    Stable softmax implementation.
+    """
+    x_max = torch.max(x, dim=dim, keepdim=True).values
+    x_exp = torch.exp(x - x_max)
+    x_exp_sum = torch.sum(x_exp, dim=dim, keepdim=True)
+    return x_exp / x_exp_sum
 
 
 def log_softmax(
@@ -15,6 +30,7 @@ def log_softmax(
     log_sum_exp = torch.log(torch.sum(torch.exp(stable_x), dim=dim, keepdim=True))
     return stable_x - log_sum_exp
 
+
 def cross_entropy_loss(
     logits: torch.Tensor,
     targets: torch.Tensor
@@ -26,6 +42,42 @@ def cross_entropy_loss(
     log_probs = log_softmax(logits, dim=-1)
     loss = -log_probs[torch.arange(logits.size(0)), targets]
     return loss.mean()
+
+
+def top_p_sampling(
+    logits: torch.Tensor,
+    p: float = 0.9,
+    t: float = 1.0
+) -> torch.Tensor:
+    """Performs top-p (nucleus) sampling on the logits."""
+    if t <= 0:
+        raise ValueError("Temperature t must be greater than 0.")
+    logits = logits / t
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+    cumulative_probs = torch.cumsum(softmax(sorted_logits, dim=-1), dim=-1)
+    
+    # Create a mask for tokens to keep
+    sorted_indices_to_remove = cumulative_probs > p
+    # Shift the mask to the right to keep at least one token
+    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+    sorted_indices_to_remove[..., 0] = 0
+    
+    # Scatter the mask back to the original indices
+    indices_to_remove = torch.zeros_like(logits, dtype=torch.bool).scatter_(
+        dim=-1,
+        index=sorted_indices,
+        src=sorted_indices_to_remove
+    )
+    
+    # Set logits of removed tokens to -inf
+    logits = logits.masked_fill(indices_to_remove, float('-inf'))
+    
+    # Sample from the filtered distribution
+    probs = softmax(logits, dim=-1)
+    sampled_indices = torch.multinomial(probs, num_samples=1)
+    
+    return sampled_indices.squeeze(-1)
+
 
 def get_batch(
     x: np.ndarray,

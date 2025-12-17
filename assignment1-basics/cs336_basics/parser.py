@@ -80,4 +80,11 @@ def parse_args():
         "--out_path", type=str, default="./result/transformer", help="Output directory"
     )
 
+    parser.add_argument(
+        "--tokenizer_model_path", 
+        type=str, 
+        default="./result/tokenizer/tinystories/hf_tokenizer_bpe.json", 
+        help="Path to tokenizer model"
+    )
+
     return parser.parse_args()
