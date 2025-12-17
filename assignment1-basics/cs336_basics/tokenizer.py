@@ -3,7 +3,7 @@ import regex as re
 from tqdm import tqdm
 from array import array
 from typing import Iterable, Iterator
-from tokenizers import Tokenizer as HFTokenizer
+from tokenizers import Tokenizer as HFTokenizer, Encoding
 from .train_bpe import GPT2_PATTERN
 
 
@@ -147,6 +147,11 @@ class HuggingFaceTokenizer():
         """Encode an input text into a sequence of token IDs."""
         encoding = self.tokenizer.encode(text)
         return encoding.ids
+    
+    def encode_batch(self, texts: list[str]) -> list[Encoding]:
+        """Encode a batch of input texts into a list of Encoding objects."""
+        encodings = self.tokenizer.encode_batch(texts)
+        return encodings
 
     def encode_lines(
         self, 
@@ -163,12 +168,12 @@ class HuggingFaceTokenizer():
                     continue
                 batch.append(line)
                 if len(batch) >= batch_lines:
-                    encs = self.tokenizer.encode_batch(batch)
+                    encs = self.encode_batch(batch)
                     batch.clear()
                     for enc in encs:
                         token_ids.extend(enc.ids)
             if batch:
-                encs = self.tokenizer.encode_batch(batch)
+                encs = self.encode_batch(batch)
                 batch.clear()
                 for enc in encs:
                     token_ids.extend(enc.ids)

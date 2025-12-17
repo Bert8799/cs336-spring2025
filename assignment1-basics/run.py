@@ -122,23 +122,29 @@ def run_inference():
 
     solver.load(path=f"{args.out_path}/checkpoint_iter_20000.pt")
 
-    tokenizer = HuggingFaceTokenizer(model_filepath=args.tokenizer_model_path)
-    prompt = "Once upon a time"
-    input_ids = tokenizer.encode(prompt)
-    input_tensor = torch.tensor([input_ids], dtype=torch.long, device=device)
+    print("Checkpoint loaded for inference.")
 
-    output_length = 50
+    tokenizer = HuggingFaceTokenizer(model_filepath=args.tokenizer_model_path)
+    # (3, 4)
+    prompts = [
+        "Once upon a time",
+        "In a world where",
+        "The quick brown fox"
+    ]
+    input_ids = [tokenizer.encode(prompt) for prompt in prompts]
+    input_tensor = torch.tensor(input_ids, dtype=torch.long, device=device)
+
     generated_ids = solver.inference(
         input_ids=input_tensor,
-        output_length=output_length,
-        p=0.9,
-        t=1.0
-    )
+        output_length=args.output_length,
+        p=args.top_p,
+        t=args.temperature
+    ).detach().cpu()
 
-    generated_ids = generated_ids[0].cpu().numpy().tolist()
-    generated_text = tokenizer.decode(generated_ids)
-    print("Generated Text:")
-    print(generated_text)
+    for ids in generated_ids:
+        generated_text = tokenizer.decode(ids.numpy().tolist())
+        print("Generated Text:")
+        print(generated_text)
 
 if __name__ == "__main__": 
     run_inference()

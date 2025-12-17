@@ -50,8 +50,8 @@ def top_p_sampling(
     t: float = 1.0
 ) -> torch.Tensor:
     """Performs top-p (nucleus) sampling on the logits."""
-    if t <= 0:
-        raise ValueError("Temperature t must be greater than 0.")
+    assert t > 0, "Temperature t must be greater than 0."
+    assert logits.dim() <= 2, "logits should be of shape (vocab_size,) or (batch_size, vocab_size)"
     logits = logits / t
     sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
     cumulative_probs = torch.cumsum(softmax(sorted_logits, dim=-1), dim=-1)

@@ -80,11 +80,21 @@ def parse_args():
         "--out_path", type=str, default="./result/transformer", help="Output directory"
     )
 
+    # Inference arguments
     parser.add_argument(
         "--tokenizer_model_path", 
         type=str, 
         default="./result/tokenizer/tinystories/hf_tokenizer_bpe.json", 
         help="Path to tokenizer model"
+    )
+    parser.add_argument(
+        "--output_length", type=int, default=50, help="Length of generated output"
+    )
+    parser.add_argument(
+        "--top_p", type=float, default=0.9, help="Top-p sampling parameter"
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=1.0, help="Sampling temperature"
     )
 
     return parser.parse_args()

@@ -90,7 +90,7 @@ class Solver:
         p: float = 0.9,
         t: float = 1.0
     ) -> torch.Tensor:
-        assert input_ids.dim() == 2, "input_ids should be of shape (1, seq_len)"
+        assert input_ids.dim() == 2, "input_ids should be of shape (batch_size, seq_len)"
         self.model.eval()
         
         generated_ids = input_ids.clone()
@@ -100,6 +100,7 @@ class Solver:
             else:
                 context_ids = generated_ids
             logits = self.model(context_ids)
+            logits = logits[:, -1, :]  # Get logits for the last token
             next_ids = top_p_sampling(logits, p=p, t=t)
             generated_ids = torch.cat([generated_ids, next_ids.unsqueeze(1)], dim=1)
 
