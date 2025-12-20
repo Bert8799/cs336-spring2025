@@ -67,22 +67,23 @@ def benchmark_model(model, x, y, mod="forward"):
 
     if mod == "forward":
         for _ in range(timed_steps):
-            torch.cuda.reset_max_memory_allocated() if device.type == 'cuda' else None
+            torch.cuda.reset_peak_memory_stats(device=device) if device.type == 'cuda' else None
             start = timeit.default_timer()
-            forward_pass()
-            torch.cuda.synchronize() if device.type == 'cuda' else None
+            with torch.inference_mode():
+                forward_pass()
+            torch.cuda.synchronize(device) if device.type == 'cuda' else None
             end = timeit.default_timer()
             times.append(end - start)
-            memories.append(torch.cuda.max_memory_allocated() / (1024 ** 3) if device.type == 'cuda' else 0)
+            memories.append((torch.cuda.max_memory_allocated(device=device) / (1024 ** 3)) if device.type == 'cuda' else 0)
     elif mod == "backward":
         for _ in range(timed_steps):
-            torch.cuda.reset_max_memory_allocated() if device.type == 'cuda' else None
+            torch.cuda.reset_peak_memory_stats(device=device) if device.type == 'cuda' else None
             start = timeit.default_timer()
             backward_pass()
-            torch.cuda.synchronize() if device.type == 'cuda' else None
+            torch.cuda.synchronize(device) if device.type == 'cuda' else None
             end = timeit.default_timer()
             times.append(end - start)
-            memories.append(torch.cuda.max_memory_allocated() / (1024 ** 3) if device.type == 'cuda' else 0)
+            memories.append((torch.cuda.max_memory_allocated(device=device) / (1024 ** 3)) if device.type == 'cuda' else 0)
 
     return mean(times), stdev(times), mean(memories)
 
@@ -107,8 +108,12 @@ def run_benchmark(output_file="../results/benchmark/benchmark_results.md"):
         fwd_time_mean, fwd_time_std, fwd_memory = benchmark_model(model, x, y, mod="forward")
         print(f"  Forward Pass: {fwd_time_mean:.4f} s ± {fwd_time_std:.4f} s, Memory: {fwd_memory:.4f} GB")
 
-        bwd_time_mean, bwd_time_std, bwd_memory = benchmark_model(model, x, y, mod="backward")
-        print(f"  Backward Pass: {bwd_time_mean:.4f} s ± {bwd_time_std:.4f} s, Memory: {bwd_memory:.4f} GB")
+        if config["size"] == "2.7B":
+            bwd_time_mean, bwd_time_std, bwd_memory = float('nan'), float('nan'), float('nan')
+            print("  Skipping backward pass for 2.7B model due to memory constraints.")
+        else:
+            bwd_time_mean, bwd_time_std, bwd_memory = benchmark_model(model, x, y, mod="backward")
+            print(f"  Backward Pass: {bwd_time_mean:.4f} s ± {bwd_time_std:.4f} s, Memory: {bwd_memory:.4f} GB")
         print()
 
         results.append({
