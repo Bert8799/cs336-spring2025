@@ -33,7 +33,7 @@ device = torch.device("cuda")
 
 mixed = True
 target = "mixed" if mixed else "benchmark"
-ctx = torch.amp.autocast(device.type, torch.bfloat16) if mixed else nullcontext()
+ctx = autocast(device.type, torch.bfloat16) if mixed else nullcontext()
 scaler = GradScaler()
 
 
