@@ -3,7 +3,7 @@ from math import ceil
 from einops import einsum
 
 
-class FlashAttentionPyTorch(torch.autograd.Funtion):
+class FlashAttentionPyTorch(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q, K, V, is_causal=False):
         """
@@ -23,12 +23,12 @@ class FlashAttentionPyTorch(torch.autograd.Funtion):
         dim = Q.shape[2]
 
         Br, Bc = 32, 32  # Block sizes for query and key/value
-        Tr, Tc = ceil(Br / seq_q), ceil(Bc / seq_kv)  # Number of blocks
+        Tr, Tc = ceil(seq_q / Br), ceil(seq_kv / Bc)  # Number of blocks
 
-        softamx_scale = 1.0 / (dim ** 0.5)
+        softmax_scale = 1.0 / (dim ** 0.5)
 
-        O = torch.zero_like(Q)
-        L = torch.zoro((B, seq_q), device=Q.device, dtype=Q.dtype)
+        O = torch.zeros_like(Q)
+        L = torch.zeros((B, seq_q), device=Q.device, dtype=Q.dtype)
 
         for i in range(Tr):
             start_q = i * Br
@@ -46,7 +46,7 @@ class FlashAttentionPyTorch(torch.autograd.Funtion):
                 K_j = K[:, start_kv:end_kv, :]  # (B, Bc, dim)
                 V_j = V[:, start_kv:end_kv, :]  # (B, Bc, dim)
 
-                S_ij = einsum(Q_i, K_j, 'b seq_q d,b seq_kv d->b seq_q seq_kv') * softamx_scale  # (B, Br, Bc)
+                S_ij = einsum(Q_i, K_j, 'b seq_q d,b seq_kv d->b seq_q seq_kv') * softmax_scale  # (B, Br, Bc)
 
                 row_m = torch.maximum(row_m_prev, S_ij.max(dim=-1).values)  # (B, Br)
                 P_ij = torch.exp(S_ij - row_m.unsqueeze(-1))  # (B, Br, Bc)
@@ -59,8 +59,9 @@ class FlashAttentionPyTorch(torch.autograd.Funtion):
 
                 row_m_prev = row_m
             
-            O[:, start_q:end_q, :] = O_i
-            L[:, start_q:end_q] = torch.log(row_l) + row_m
+            # matrix inverse of diag(row_l) @ O_i ==> O_i / row_l
+            O[:, start_q:end_q, :] = O_i / row_l.unsqueeze(-1).clamp(min=1e-8)
+            L[:, start_q:end_q] = torch.log(row_l.clamp(min=1e-8)) + row_m
         
         ctx.save_for_backward(Q, K, V, O, L)
         return O
