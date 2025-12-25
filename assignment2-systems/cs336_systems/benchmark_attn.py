@@ -4,11 +4,14 @@ import pandas as pd
 from einops import rearrange, einsum, reduce
 
 
+torch.set_float32_matmul_precision('high')
+
+
 def get_config():
     # Model configurations
     batch_size = 8
     d_models = [6, 32, 64, 128]
-    seq_lens = [64, 128, 256, 512, 1024]
+    seq_lens = [256, 1024, 4096, 8192]
 
     return batch_size, d_models, seq_lens
 
@@ -26,24 +29,23 @@ def softmax(x):
 
 def scaled_dot_product_attention(q, k, v):
     d_k = q.size(-1)
-    scores = einsum(q, k, "b h seq_q d, b h seq_k d -> b h seq_q seq_k") / (d_k ** 0.5)
+    scores = einsum(q, k, "b seq_q d, b seq_k d -> b seq_q seq_k") / (d_k ** 0.5)
     attn_weights = softmax(scores)
-    output = einsum(attn_weights, v, "b h seq_q seq_k, b h seq_k d -> b h seq_q d")
+    output = einsum(attn_weights, v, "b seq_q seq_k, b seq_k d -> b seq_q d")
     return output
 
 
 def benchmark_attention(batch_size, d_model, seq_len, warmup_steps=5, timed_steps=10):
-    num_heads = 8
-    d_head = d_model // num_heads
+    q = torch.randn(batch_size, seq_len, d_model, device=device)
+    k = torch.randn(batch_size, seq_len, d_model, device=device)
+    v = torch.randn(batch_size, seq_len, d_model, device=device)
 
-    q = torch.randn(batch_size, num_heads, seq_len, d_head, device=device)
-    k = torch.randn(batch_size, num_heads, seq_len, d_head, device=device)
-    v = torch.randn(batch_size, num_heads, seq_len, d_head, device=device)
+    attention = torch.compile(scaled_dot_product_attention)
 
     # forward
     # Warm-up
     for _ in range(warmup_steps):
-        _ = scaled_dot_product_attention(q, k, v)
+        _ = attention(q, k, v)
     
     torch.cuda.synchronize()
 
@@ -51,12 +53,12 @@ def benchmark_attention(batch_size, d_model, seq_len, warmup_steps=5, timed_step
     forward_times = []
     for _ in range(timed_steps):
         start_time = timeit.default_timer()
-        _ = scaled_dot_product_attention(q, k, v)
+        _ = attention(q, k, v)
         torch.cuda.synchronize()
         forward_times.append(timeit.default_timer() - start_time)
     
     torch.cuda.reset_peak_memory_stats()
-    _ = scaled_dot_product_attention(q, k, v)
+    _ = attention(q, k, v)
     torch.cuda.synchronize()
     memory_before = torch.cuda.max_memory_allocated() / (1024 ** 3)
 
@@ -67,7 +69,7 @@ def benchmark_attention(batch_size, d_model, seq_len, warmup_steps=5, timed_step
     # backward
     # Warm-up
     for _ in range(warmup_steps):
-        output = scaled_dot_product_attention(q, k, v)
+        output = attention(q, k, v)
         output.mean().backward()
 
     torch.cuda.synchronize()
@@ -76,13 +78,13 @@ def benchmark_attention(batch_size, d_model, seq_len, warmup_steps=5, timed_step
     backward_times = []
     for _ in range(timed_steps):
         start_time = timeit.default_timer()
-        output = scaled_dot_product_attention(q, k, v)
+        output = attention(q, k, v)
         output.mean().backward()
         torch.cuda.synchronize()
         backward_times.append(timeit.default_timer() - start_time)
     
     torch.cuda.reset_peak_memory_stats()
-    output = scaled_dot_product_attention(q, k, v)
+    output = attention(q, k, v)
     output.mean().backward()
     torch.cuda.synchronize()
     memory_after = torch.cuda.max_memory_allocated() / (1024 ** 3)
@@ -103,7 +105,7 @@ def benchmark_attention(batch_size, d_model, seq_len, warmup_steps=5, timed_step
     }
 
 
-def run_benchmarks(output_file=f"../result/benchmark/attn_results.md"):
+def run_benchmarks(output_file=f"../result/benchmark/attn_compiled.md"):
     batch_size, d_models, seq_lens = get_config()
     print(f"Fixed batch size: {batch_size}")
 
