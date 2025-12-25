@@ -29,7 +29,7 @@ class FlashAttentionPyTorch(torch.autograd.Function):
 
         softmax_scale = 1.0 / (dim ** 0.5)
 
-        O = torch.zeros_like(Q)
+        O = torch.zeros_like(Q, dtype=torch.float32)
         L = torch.zeros((B, seq_q), device=Q.device, dtype=Q.dtype)
 
         for i in range(Tr):
@@ -80,7 +80,7 @@ class FlashAttentionPyTorch(torch.autograd.Function):
             - dV: Gradient of value tensor of shape (batch_size, seq_kv, dim)
             - None: Placeholder for is_causal argument
         """
-        Q, K, V, O, L = ctx.saveds
+        Q, K, V, O, L = ctx.saved_tensors
         is_causal = ctx.is_causal
 
         B = Q.shape[0]
@@ -89,13 +89,13 @@ class FlashAttentionPyTorch(torch.autograd.Function):
         dim = Q.shape[2]
 
         Br, Bc = 32, 32  # Block sizes for query and key/value
-        Tr, Tc = ceil(Br / seq_q), ceil(Bc / seq_kv)  # Number of blocks
+        Tr, Tc = ceil(seq_q / Br), ceil(seq_kv / Bc)  # Number of blocks
 
-        sofmax_scale = 1.0 / (dim ** 0.5)
+        softmax_scale = 1.0 / (dim ** 0.5)
 
-        dQ = torch.zeros_like(Q)
-        dK = torch.zeros_like(K)
-        dV = torch.zeros_like(V)
+        dQ = torch.zeros_like(Q, dtype=torch.float32)
+        dK = torch.zeros_like(K, dtype=torch.float32)
+        dV = torch.zeros_like(V, dtype=torch.float32)
 
         D = torch.sum(O * dO, dim=-1)  # (B, seq_q)
 
@@ -118,19 +118,18 @@ class FlashAttentionPyTorch(torch.autograd.Function):
                 L_i = L[:, start_q:end_q]  # (B, Br)
                 D_i = D[:, start_q:end_q]  # (B, Br)
 
-                S_ij = einsum(Q_i, K_j, 'b seq_q d,b seq_kv d->b seq_q seq_kv') * sofmax_scale  # (B, Br, Bc)
+                S_ij = einsum(Q_i, K_j, 'b seq_q d,b seq_kv d->b seq_q seq_kv') * softmax_scale  # (B, Br, Bc)
                 P_ij = torch.exp(S_ij - L_i.unsqueeze(-1))  # (B, Br, Bc)
 
                 dV_j += einsum(P_ij, dO_i, 'b seq_q seq_kv,b seq_q d->b seq_kv d')  # (B, Bc, dim)
                 dP_ij = einsum(dO_i, V_j, 'b seq_q d,b seq_kv d->b seq_q seq_kv')  # (B, Br, Bc)
                 dS_ij = P_ij * (dP_ij - D_i.unsqueeze(-1))  # (B, Br, Bc)
                 
-                dQ[:, start_q:end_q, :] += einsum(dS_ij, K_j, 'b seq_q seq_kv,b seq_kv d->b seq_q d') * sofmax_scale  # (B, Br, dim)
-                dK_j += einsum(dS_ij, Q_i, 'b seq_q seq_kv,b seq_q d->b seq_kv d') * sofmax_scale  # (B, Bc, dim)
+                dQ[:, start_q:end_q, :] += einsum(dS_ij, K_j, 'b seq_q seq_kv,b seq_kv d->b seq_q d') * softmax_scale  # (B, Br, dim)
+                dK_j += einsum(dS_ij, Q_i, 'b seq_q seq_kv,b seq_q d->b seq_kv d') * softmax_scale  # (B, Bc, dim)
             
             dK[:, start_kv:end_kv, :] = dK_j
             dV[:, start_kv:end_kv, :] = dV_j
-        
         return dQ, dK, dV, None # is_causal has no gradient
 
 
@@ -140,7 +139,7 @@ def flash_fwd_kernel(
     O_ptr, L_ptr,         # output matrix pointers
     # Stride parameters for each tensor
     stride_qb, stride_qq, stride_qd,  # Q batch/query/feature strides
-    stride_kb, stride_kk, stride_kd,  # K batch/key/feature strides  
+    stride_kb, stride_kd, stride_kk,  # K batch/key/feature strides  
     stride_vb, stride_vk, stride_vd,  # V batch/key/feature strides
     stride_ob, stride_oq, stride_od,  # O batch/query/feature strides
     stride_lb, stride_lq,             # L batch/query strides
@@ -177,7 +176,7 @@ def flash_fwd_kernel(
     K_block_ptr = tl.make_block_ptr(
         K_ptr + batch_index * stride_kb,
         shape=(D, N_KEYS),
-        strides=(stride_kk, stride_kd),
+        strides=(stride_kd, stride_kk),
         offsets=(0, 0),
         block_shape=(D, K_TILE_SIZE),     # !! K.T !!
         order=(0, 1)                      # column-major
@@ -192,7 +191,7 @@ def flash_fwd_kernel(
         order=(1, 0)                      # row-major
     )
 
-    Q_i = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_opstion='zero')
+    Q_i = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option='zero')
 
     O_i = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32)
     L_i = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
@@ -200,8 +199,8 @@ def flash_fwd_kernel(
 
     n_keys = (query_tile_index + 1) * Q_TILE_SIZE if is_causal else N_KEYS
     for j in range(tl.cdiv(n_keys, K_TILE_SIZE)):
-        K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_opstion='zero')
-        V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_opstion='zero')
+        K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option='zero')
+        V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option='zero')
 
         S_ij = tl.dot(Q_i, K_j) * scale
 
@@ -224,11 +223,12 @@ def flash_fwd_kernel(
 
         M_i = row_m
 
-        K_block_ptr = tl.advance_block_ptr(K_block_ptr, (0, K_TILE_SIZE))
-        V_block_ptr = tl.advance_block_ptr(V_block_ptr, (K_TILE_SIZE, 0))
+        K_block_ptr = tl.advance(K_block_ptr, (0, K_TILE_SIZE))
+        V_block_ptr = tl.advance(V_block_ptr, (K_TILE_SIZE, 0))
     
-    O_i = O_i / L_i[:, None].clamp(min=1e-8)
-    L_i = tl.log(L_i.clamp(min=1e-8)) + M_i
+    L_i = tl.maximum(L_i, 1e-8)
+    O_i = O_i / L_i[:, None]
+    L_i = tl.log(L_i) + M_i
 
     O_block_ptr = tl.make_block_ptr(
         O_ptr + batch_index * stride_ob,
@@ -252,6 +252,7 @@ def flash_fwd_kernel(
     tl.store(L_block_ptr, L_i, boundary_check=(0,))
 
 
+@triton.jit
 def flash_bwd_kernel(
     Q_ptr, K_ptr, V_ptr,    # input matrix pointers
     L_ptr,                  # Logsumexp matrix pointers
@@ -260,7 +261,7 @@ def flash_bwd_kernel(
     dQ_ptr, dK_ptr, dV_ptr, # gradient of Q/K/V matrix pointers
     # Stride parameters for each tensor
     stride_qb, stride_qq, stride_qd,    # Q batch/query/feature strides
-    stride_kb, stride_kd, stride_kk,    # K batch/key/feature strides  
+    stride_kb, stride_kk, stride_kd,    # K batch/key/feature strides  
     stride_vb, stride_vk, stride_vd,    # V batch/key/feature strides
     stride_lb, stride_lq,               # L batch/query strides
     stride_dob, stride_doq, stride_dod, # dO batch/query/feature strides
@@ -282,18 +283,18 @@ def flash_bwd_kernel(
         Q_ptr + batch_index * stride_qb,
         shape=(N_QUERIES, D),
         strides=(stride_qq, stride_qd),
-        offsets=(0, 0),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
         order=(1, 0)
     )
 
     K_block_ptr = tl.make_block_ptr(
         K_ptr + batch_index * stride_kb,
-        shape=(D, N_KEYS),
-        strides=(stride_kd, stride_kk),
-        offsets=(0, key_tile_index * K_TILE_SIZE),
-        block_shape=(D, K_TILE_SIZE),     # !! K.T !!
-        order=(0, 1)                      # column-major
+        shape=(N_KEYS, D),
+        strides=(stride_kk, stride_kd),
+        offsets=(key_tile_index * K_TILE_SIZE, 0),
+        block_shape=(K_TILE_SIZE, D),
+        order=(1, 0)
     )
 
     V_block_ptr = tl.make_block_ptr(
@@ -302,14 +303,14 @@ def flash_bwd_kernel(
         strides=(stride_vk, stride_vd),
         offsets=(key_tile_index * K_TILE_SIZE, 0),
         block_shape=(K_TILE_SIZE, D),
-        order=(1, 0)                      # row-major
+        order=(1, 0)
     )
 
     L_block_ptr = tl.make_block_ptr(
         L_ptr + batch_index * stride_lb,
         shape=(N_QUERIES,),
         strides=(stride_lq,),
-        offsets=(0,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
         block_shape=(Q_TILE_SIZE,),
         order=(0, )
     )
@@ -318,7 +319,7 @@ def flash_bwd_kernel(
         dO_ptr + batch_index * stride_dob,
         shape=(N_QUERIES, D),
         strides=(stride_doq, stride_dod),
-        offsets=(0, 0),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
         order=(1, 0)
     )
@@ -327,34 +328,31 @@ def flash_bwd_kernel(
         D_ptr + batch_index * stride_db,
         shape=(N_QUERIES,),
         strides=(stride_dq,),
-        offsets=(0,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
         block_shape=(Q_TILE_SIZE,),
         order=(0,)
     )
 
-    dQ_block_ptr = tl.make_block_ptr(
-        dQ_ptr + batch_index * stride_dqb,
-        shape=(N_QUERIES, D),
-        strides=(stride_dqq, stride_dqd),
-        offsets=(query_tile_index * Q_TILE_SIZE, 0),
-        block_shape=(Q_TILE_SIZE, D),
-        order=(1, 0)
-    )
+    dQ_ptr_base = dQ_ptr + batch_index * stride_dqb
 
-    K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_opstion='zero')
-    V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_opstion='zero')
+    K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option='zero')
+    V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option='zero')
 
-    dK_i = tl.zeros((D, K_TILE_SIZE), dtype=tl.float32)
+    dK_i = tl.zeros((K_TILE_SIZE, D), dtype=tl.float32)
     dV_i = tl.zeros((K_TILE_SIZE, D), dtype=tl.float32)
 
+    cols = tl.arange(0, D)
+    curr_Q_idx = query_tile_index * Q_TILE_SIZE
+    offsets_dQ = (curr_Q_idx + tl.arange(0, Q_TILE_SIZE))[:, None] * stride_dqq \
+                + cols[None, :] * stride_dqd
 
     for i in range(query_tile_index, tl.cdiv(N_QUERIES, Q_TILE_SIZE)):
-        Q_i = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_opstion='zero')
-        L_i = tl.load(L_block_ptr, boundary_check=(0,), padding_opstion='zero')
-        dO_i = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_opstion='zero')
-        D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_opstion='zero')
+        Q_i = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option='zero')
+        L_i = tl.load(L_block_ptr, boundary_check=(0,), padding_option='zero')
+        dO_i = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_option='zero')
+        D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_option='zero')
 
-        S_ij = tl.dot(Q_i, K_j) * scale
+        S_ij = tl.dot(Q_i, K_j.T) * scale
 
         if is_causal:
             query_indices = i * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
@@ -376,28 +374,32 @@ def flash_bwd_kernel(
 
         # Update dQ atomically
         dQ_step = tl.dot(dS_ij, K_j) * scale
-        tl.atomic_add(dQ_block_ptr, dQ_step.to(dO_block_ptr.dtype.element_ty), boundary_check=(0, 1))
 
-        Q_block_ptr = tl.advance_block_ptr(Q_block_ptr, (Q_TILE_SIZE, 0))
-        L_block_ptr = tl.advance_block_ptr(L_block_ptr, (Q_TILE_SIZE,))
-        dO_block_ptr = tl.advance_block_ptr(dO_block_ptr, (Q_TILE_SIZE, 0))
-        D_block_ptr = tl.advance_block_ptr(D_block_ptr, (Q_TILE_SIZE,))
-        dQ_block_ptr = tl.advance_block_ptr(dQ_block_ptr, (Q_TILE_SIZE, 0))
+        mask = (curr_Q_idx + tl.arange(0, Q_TILE_SIZE))[:, None] < N_QUERIES
+        tl.atomic_add(dQ_ptr_base + offsets_dQ, dQ_step.to(dO_block_ptr.dtype.element_ty), mask=mask)
+
+        Q_block_ptr = tl.advance(Q_block_ptr, (Q_TILE_SIZE, 0))
+        L_block_ptr = tl.advance(L_block_ptr, (Q_TILE_SIZE,))
+        dO_block_ptr = tl.advance(dO_block_ptr, (Q_TILE_SIZE, 0))
+        D_block_ptr = tl.advance(D_block_ptr, (Q_TILE_SIZE,))
+
+        offsets_dQ += Q_TILE_SIZE * stride_dqq
+        curr_Q_idx += Q_TILE_SIZE
 
     dK_block_ptr = tl.make_block_ptr(
         dK_ptr + batch_index * stride_kb,
-        shape=(D, N_KEYS),
-        strides=(stride_kd, stride_kk),
-        offsets=(0, 0),
-        block_shape=(D, K_TILE_SIZE),
-        order=(0, 1)
+        shape=(N_KEYS, D),
+        strides=(stride_kk, stride_kd),
+        offsets=(key_tile_index * K_TILE_SIZE, 0),
+        block_shape=(K_TILE_SIZE, D),
+        order=(1, 0)
     )
 
     dV_block_ptr = tl.make_block_ptr(
         dV_ptr + batch_index * stride_vb,
         shape=(N_KEYS, D),
         strides=(stride_vk, stride_vd),
-        offsets=(0, 0),
+        offsets=(key_tile_index * K_TILE_SIZE, 0),
         block_shape=(K_TILE_SIZE, D),
         order=(1, 0)
     )
@@ -423,8 +425,8 @@ class FlashAttentionTriton(torch.autograd.Function):
 
         softmax_scale = 1.0 / (dim ** 0.5)
 
-        O = torch.empty_like(Q)
-        L = torch.empty((B, seq_q), device=Q.device, dtype=Q.dtype)
+        O = torch.empty_like(Q, dtype=torch.float32)
+        L = torch.empty((B, seq_q), device=Q.device, dtype=torch.float32)
 
         K = rearrange(K, 'b s d -> b d s')
         grid = (Tr, B)
@@ -440,18 +442,18 @@ class FlashAttentionTriton(torch.autograd.Function):
             softmax_scale,
             D=dim, Q_TILE_SIZE=Br, K_TILE_SIZE=Bc, is_causal=is_causal
         )
-
+        K = rearrange(K, 'b d s -> b s d')
         ctx.save_for_backward(Q, K, V, O, L)
         return O
     
     @staticmethod
     def backward(ctx, dO):
-        Q, K, V, O, L = ctx.saveds
+        Q, K, V, O, L = ctx.saved_tensors
         is_causal = ctx.is_causal
 
         B = Q.shape[0]
         seq_q = Q.shape[1]
-        seq_kv = K.shape[2]
+        seq_kv = K.shape[1]
         dim = Q.shape[2]
 
         assert dO.is_cuda, "FlashAttentionTriton only supports CUDA tensors."
@@ -462,13 +464,11 @@ class FlashAttentionTriton(torch.autograd.Function):
 
         softmax_scale = 1.0 / (dim ** 0.5)
 
-        dQ = torch.zeros_like(Q)
-        dK = torch.zeros_like(K)
-        dV = torch.zeros_like(V)
+        dQ = torch.zeros_like(Q, dtype=torch.float32)
+        dK = torch.zeros_like(K, dtype=torch.float32)
+        dV = torch.zeros_like(V, dtype=torch.float32)
 
         D = torch.sum(O * dO, dim=-1)
-
-        K = rearrange(K, 'b d s -> b s d')
 
         grid = (Tc, B)
         flash_bwd_kernel[grid](
@@ -478,7 +478,7 @@ class FlashAttentionTriton(torch.autograd.Function):
             D,
             dQ, dK, dV,
             Q.stride(0), Q.stride(1), Q.stride(2),
-            K.stride(0), K.stride(2), K.stride(1),
+            K.stride(0), K.stride(1), K.stride(2),
             V.stride(0), V.stride(1), V.stride(2),
             L.stride(0), L.stride(1),
             dO.stride(0), dO.stride(1), dO.stride(2),
