@@ -5,6 +5,9 @@ import pandas as pd
 from cs336_systems.flash_attn import FlashAttentionPyTorch, FlashAttentionTriton
 
 
+torch.set_float32_matmul_precision('high')
+
+
 def get_config():
     # Model configurations
     batch_size = 1
@@ -19,72 +22,66 @@ assert torch.cuda.is_available(), "CUDA is not available. Please run on a machin
 device = torch.device("cuda")
 
 
-def benchmark_flash_attention(impl1, impl2, batch_size, seq_len, dim, dtype):
+def benchmark_flash_attention(attn, batch_size, seq_len, dim, dtype):
     Q = torch.randn(batch_size, seq_len, dim, device=device, dtype=dtype, requires_grad=True)
     K = torch.randn(batch_size, seq_len, dim, device=device, dtype=dtype, requires_grad=True)
     V = torch.randn(batch_size, seq_len, dim, device=device, dtype=dtype, requires_grad=True)
+    dO = torch.randn(batch_size, seq_len, dim, device=device, dtype=torch.float32)
 
-    attention1 = torch.compile(impl1)
-    attention2 = torch.compile(impl2)
     # forward
-    fwd_time1 = triton.testing.do_bench(lambda: attention1(Q, K, V, True), warmup=5, rep=10) * 1000
-    fwd_time2 = triton.testing.do_bench(lambda: attention2(Q, K, V, True), warmup=5, rep=10) * 1000
+    fwd_time = triton.testing.do_bench(lambda: attn(Q, K, V, True), warmup=5, rep=10) * 1000
     # backward
-    def backward1():
-        out = attention1(Q, K, V, True)
-        out.sum().backward()
+    full_time = triton.testing.do_bench(lambda: attn(Q, K, V, True).backward(dO), warmup=5, rep=10) * 1000
+    bwd_time = full_time - fwd_time
 
-    def backward2():
-        out = attention2(Q, K, V, True)
-        out.sum().backward()
-    
-    full_time1 = triton.testing.do_bench(backward1, warmup=5, rep=10) * 1000
-    full_time2 = triton.testing.do_bench(backward2, warmup=5, rep=10) * 1000
-
-    bwd_time1 = full_time1 - fwd_time1
-    bwd_time2 = full_time2 - fwd_time2
-
-    fwd_time1 = round(fwd_time1, 2)
-    fwd_time2 = round(fwd_time2, 2)
-    bwd_time1 = round(bwd_time1, 2)
-    bwd_time2 = round(bwd_time2, 2)
+    fwd_time = round(fwd_time, 2)
+    bwd_time = round(bwd_time, 2)
 
     torch.cuda.empty_cache()
 
     return {
-        "fwd_time1": fwd_time1,
-        "fwd_time2": fwd_time2,
-        "bwd_time1": bwd_time1,
-        "bwd_time2": bwd_time2
+        "fwd_time": fwd_time,
+        "bwd_time": bwd_time
     }
 
 
-def run_benchmarks(output_file=f"../result/benchmark/flash_attn.md"):
+def run_benchmarks(output_file=f"../result/benchmark/attn_triton.md"):
     batch_size, seq_lens, dims, dtypes = get_config()
     print(f'Fixed batch size:{batch_size}')
+
+    attn_pytorch = torch.compile(FlashAttentionPyTorch.apply)
+    attn_triton = FlashAttentionTriton.apply
 
     results = []
     for dtype in dtypes:
         for seq_len in seq_lens:
             for dim in dims:
+                print(f'Computing dtype={dtype}, seq_len={seq_len}, dim={dim}')
+                if seq_len == 128:
+                    # PyTorch implementation, to slow to run for large seq_len
+                    res = benchmark_flash_attention(
+                        attn_pytorch,
+                        batch_size,
+                        seq_len,
+                        dim,
+                        dtype
+                    )
+                    print(f'    PyTorch - forward: {res["fwd_time"]} ms, backward: {res["bwd_time"]} ms')
+                # Triton implementation
                 res = {
-                    "batch_size": batch_size,
                     "seq_len": seq_len,
                     "dim": dim,
                     "dtype": str(dtype).split('.')[-1],
                 }
                 res.update(benchmark_flash_attention(
-                    FlashAttentionPyTorch.apply,
-                    FlashAttentionTriton.apply,
+                    attn_triton,
                     batch_size,
                     seq_len,
                     dim,
                     dtype
                 ))
                 results.append(res)
-                print(f'Completed dtype={dtype}, seq_len={seq_len}, dim={dim}')
-                print(f'    PyTorch - forward: {res["fwd_time1"]} ms, backward: {res["bwd_time1"]} ms')
-                print(f'    Triton  - forward: {res["fwd_time2"]} ms, backward: {res["bwd_time2"]} ms')
+                print(f'    Triton  - forward: {res["fwd_time"]} ms, backward: {res["bwd_time"]} ms')
     
     df = pd.DataFrame(results)
     with open(output_file, "w") as f:

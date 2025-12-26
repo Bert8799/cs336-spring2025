@@ -273,14 +273,14 @@ def flash_bwd_dQ_kernel(
     K_TILE_SIZE: tl.constexpr,          # Key/Value tile size B_k 
     is_causal: tl.constexpr=False       # Whether to apply causal masking
 ):
-    key_tile_index = tl.program_id(0)  # Query tile index
+    query_tile_index = tl.program_id(0)  # query tile index
     batch_index = tl.program_id(1)       # Batch index
 
     Q_block_ptr = tl.make_block_ptr(
         Q_ptr + batch_index * stride_qb,
         shape=(N_QUERIES, D),
         strides=(stride_qq, stride_qd),
-        offsets=(0, 0),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
         order=(1, 0)
     )
@@ -307,7 +307,7 @@ def flash_bwd_dQ_kernel(
         L_ptr + batch_index * stride_lb,
         shape=(N_QUERIES,),
         strides=(stride_lq,),
-        offsets=(0,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
         block_shape=(Q_TILE_SIZE,),
         order=(0, )
     )
@@ -316,7 +316,7 @@ def flash_bwd_dQ_kernel(
         dO_ptr + batch_index * stride_dob,
         shape=(N_QUERIES, D),
         strides=(stride_doq, stride_dod),
-        offsets=(0, 0),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
         order=(1, 0)
     )
@@ -325,7 +325,7 @@ def flash_bwd_dQ_kernel(
         D_ptr + batch_index * stride_db,
         shape=(N_QUERIES,),
         strides=(stride_dq,),
-        offsets=(0,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
         block_shape=(Q_TILE_SIZE,),
         order=(0,)
     )
@@ -337,7 +337,7 @@ def flash_bwd_dQ_kernel(
 
     dQ_i = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32)
 
-    n_keys = (key_tile_index + 1) * K_TILE_SIZE if is_causal else N_KEYS
+    n_keys = (query_tile_index + 1) * Q_TILE_SIZE if is_causal else N_KEYS
     for j in range(tl.cdiv(n_keys, K_TILE_SIZE)):
         K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option='zero')
         V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option='zero')
@@ -345,7 +345,7 @@ def flash_bwd_dQ_kernel(
         S_ij = tl.dot(Q_i, K_j.T) * scale
 
         if is_causal:
-            query_indices = tl.arange(0, Q_TILE_SIZE)
+            query_indices = query_tile_index * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
             key_indices = j * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)
             # (Q_TILE_SIZE, 1) x (1, K_TILE_SIZE) ==> (Q_TILE_SIZE, K_TILE_SIZE)
             mask = query_indices[:, None] < key_indices[None, :]
@@ -354,11 +354,11 @@ def flash_bwd_dQ_kernel(
         
         P_ij = tl.exp(S_ij - L_i[:, None])
 
-        dP_ij = tl.dot(dO_i, V_j.T)
+        dP_ij = tl.dot(dO_i, V_j.T.to(dO_i.dtype))
 
         dS_ij = P_ij * (dP_ij - D_i[:, None])
 
-        dQ_i += tl.dot(dS_ij, K_j) * scale
+        dQ_i += tl.dot(dS_ij, K_j.to(dO_i.dtype)) * scale
 
         K_block_ptr = tl.advance(K_block_ptr, (K_TILE_SIZE, 0))
         V_block_ptr = tl.advance(V_block_ptr, (K_TILE_SIZE, 0))
@@ -367,7 +367,7 @@ def flash_bwd_dQ_kernel(
         dQ_ptr + batch_index * stride_qb,
         shape=(N_QUERIES, D),
         strides=(stride_qq, stride_qd),
-        offsets=(0, 0),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
         order=(1, 0)
     )
@@ -396,7 +396,7 @@ def flash_bwd_dKdV_kernel(
     K_TILE_SIZE: tl.constexpr,          # Key/Value tile size B_k 
     is_causal: tl.constexpr=False       # Whether to apply causal masking
 ):
-    key_tile_index = tl.program_id(0)  # Key/Value tile index
+    key_tile_index = tl.program_id(0)    # Key/Value tile index
     batch_index = tl.program_id(1)       # Batch index
 
     query_tile_index = key_tile_index * K_TILE_SIZE // Q_TILE_SIZE if is_causal else 0
@@ -481,11 +481,11 @@ def flash_bwd_dKdV_kernel(
 
         dV_i += tl.dot(P_ij.to(dO_i.dtype).T, dO_i)
 
-        dP_ij = tl.dot(dO_i, V_j.T)
+        dP_ij = tl.dot(dO_i, V_j.T.to(dO_i.dtype))
 
         dS_ij = P_ij * (dP_ij - D_i[:, None])
 
-        dK_i += tl.dot(dS_ij.T, Q_i) * scale
+        dK_i += tl.dot(dS_ij.T, Q_i.to(dO_i.dtype)) * scale
 
         Q_block_ptr = tl.advance(Q_block_ptr, (Q_TILE_SIZE, 0))
         L_block_ptr = tl.advance(L_block_ptr, (Q_TILE_SIZE,))
@@ -590,15 +590,14 @@ class FlashAttentionTriton(torch.autograd.Function):
             L.stride(0), L.stride(1),
             dO.stride(0), dO.stride(1), dO.stride(2),
             D.stride(0), D.stride(1),
-            dQ.stride(0), dQ.stride(1), dQ.stride(2),
             seq_q, seq_kv,
             softmax_scale,
             D=dim, Q_TILE_SIZE=Br, K_TILE_SIZE=Bc, is_causal=is_causal
         )
 
         # compute dK, dV
-        gird = (Tc, B)
-        flash_bwd_dKdV_kernel(
+        grid = (Tc, B)
+        flash_bwd_dKdV_kernel[grid](
             Q, K, V,
             L, 
             dO,
