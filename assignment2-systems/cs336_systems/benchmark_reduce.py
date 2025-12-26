@@ -1,7 +1,7 @@
 import os
 import torch
 import pandas as pd
-import multiprocessing as mp
+import torch.multiprocessing as mp
 import torch.distributed as dist
 from timeit import default_timer
 
@@ -16,25 +16,26 @@ def get_config():
 def setup(rank, world_size, backend):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '29500'
+    torch.cuda.set_device(rank)
     dist.init_process_group(backend, rank=rank, world_size=world_size)
 
 
 def benchmark_reduce(
     rank, world_size, backend,
     tensor_size,
-    results: mp.queues.Queue,
+    results: mp.Queue,
     warmup_steps=5, timesteps=10,
 ):
     setup(rank, world_size, backend)
     
-    device = f'cuda:{rank}' if backend == 'nccl' else 'cpu'
-    tensor = torch.randn(tensor_size, device=device)
+    device = 'cuda' if backend == 'nccl' else 'cpu'
+    tensor = torch.randn(tensor_size).to(device)
 
     # Warm-up
     for _ in range(warmup_steps):
         dist.all_reduce(tensor, op=dist.ReduceOp.SUM, async_op=False)
         if backend == 'nccl':
-            torch.cuda.synchronize(device)
+            torch.cuda.synchronize()
     
     # timed runs
     sums = 0.
@@ -42,7 +43,7 @@ def benchmark_reduce(
         start = default_timer()
         dist.all_reduce(tensor, op=dist.ReduceOp.SUM, async_op=False)
         if backend == 'nccl':
-            torch.cuda.synchronize(device)
+            torch.cuda.synchronize()
         end = default_timer()
         sums += (end - start)
     sums /= timesteps
@@ -54,6 +55,9 @@ def benchmark_reduce(
         avg_time = sum(gathered_results) / world_size * 1000  # convert to milliseconds
         avg_time = round(avg_time, 2)
         results.put(avg_time)
+    
+    dist.barrier()
+    dist.destroy_process_group()
 
 
 def run_benchmark(output_file=f"../result/ddp/reuduce_results.md"):
