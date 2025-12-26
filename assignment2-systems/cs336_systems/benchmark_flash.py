@@ -66,7 +66,7 @@ def run_benchmarks(output_file=f"../result/benchmark/attn_triton.md"):
                         dim,
                         dtype
                     )
-                    print(f'    PyTorch - forward: {res["fwd_time"]} ms, backward: {res["bwd_time"]} ms')
+                    print(f'  PyTorch - forward: {res["fwd_time"]} ms, backward: {res["bwd_time"]} ms')
                 # Triton implementation
                 res = {
                     "seq_len": seq_len,
@@ -81,7 +81,7 @@ def run_benchmarks(output_file=f"../result/benchmark/attn_triton.md"):
                     dtype
                 ))
                 results.append(res)
-                print(f'    Triton  - forward: {res["fwd_time"]} ms, backward: {res["bwd_time"]} ms')
+                print(f'  Triton  - forward: {res["fwd_time"]} ms, backward: {res["bwd_time"]} ms')
     
     df = pd.DataFrame(results)
     with open(output_file, "w") as f:
