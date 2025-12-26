@@ -139,7 +139,7 @@ def flash_fwd_kernel(
     O_ptr, L_ptr,         # output matrix pointers
     # Stride parameters for each tensor
     stride_qb, stride_qq, stride_qd,  # Q batch/query/feature strides
-    stride_kb, stride_kd, stride_kk,  # K batch/key/feature strides  
+    stride_kb, stride_kd, stride_kk,  # K batch/feature/key strides  
     stride_vb, stride_vk, stride_vd,  # V batch/key/feature strides
     stride_ob, stride_oq, stride_od,  # O batch/query/feature strides
     stride_lb, stride_lq,             # L batch/query strides
@@ -253,12 +253,12 @@ def flash_fwd_kernel(
 
 
 @triton.jit
-def flash_bwd_kernel(
+def flash_bwd_dQ_kernel(
     Q_ptr, K_ptr, V_ptr,    # input matrix pointers
     L_ptr,                  # Logsumexp matrix pointers
     dO_ptr,                 # gradient of output matrix pointer
     D_ptr,                  # output * gradient matrix pointer
-    dQ_ptr, dK_ptr, dV_ptr, # gradient of Q/K/V matrix pointers
+    dQ_ptr,                 # gradient of Q matrix pointers
     # Stride parameters for each tensor
     stride_qb, stride_qq, stride_qd,    # Q batch/query/feature strides
     stride_kb, stride_kk, stride_kd,    # K batch/key/feature strides  
@@ -266,7 +266,129 @@ def flash_bwd_kernel(
     stride_lb, stride_lq,               # L batch/query strides
     stride_dob, stride_doq, stride_dod, # dO batch/query/feature strides
     stride_db, stride_dq,               # D batch/query strides
-    stride_dqb, stride_dqq, stride_dqd, # dQ batch/query/feature strides
+    N_QUERIES, N_KEYS,                  # Number of queries and keys
+    scale,                              # Scaling factor 1/sqrt(d)
+    D: tl.constexpr,                    # Feature dimension (compile-time constant)
+    Q_TILE_SIZE: tl.constexpr,          # Query tile size B_q
+    K_TILE_SIZE: tl.constexpr,          # Key/Value tile size B_k 
+    is_causal: tl.constexpr=False       # Whether to apply causal masking
+):
+    key_tile_index = tl.program_id(0)  # Query tile index
+    batch_index = tl.program_id(1)       # Batch index
+
+    Q_block_ptr = tl.make_block_ptr(
+        Q_ptr + batch_index * stride_qb,
+        shape=(N_QUERIES, D),
+        strides=(stride_qq, stride_qd),
+        offsets=(0, 0),
+        block_shape=(Q_TILE_SIZE, D),
+        order=(1, 0)
+    )
+
+    K_block_ptr = tl.make_block_ptr(
+        K_ptr + batch_index * stride_kb,
+        shape=(N_KEYS, D),
+        strides=(stride_kk, stride_kd),
+        offsets=(0, 0),
+        block_shape=(K_TILE_SIZE, D),
+        order=(1, 0)
+    )
+
+    V_block_ptr = tl.make_block_ptr(
+        V_ptr + batch_index * stride_vb,
+        shape=(N_KEYS, D),
+        strides=(stride_vk, stride_vd),
+        offsets=(0, 0),
+        block_shape=(K_TILE_SIZE, D),
+        order=(1, 0)
+    )
+
+    L_block_ptr = tl.make_block_ptr(
+        L_ptr + batch_index * stride_lb,
+        shape=(N_QUERIES,),
+        strides=(stride_lq,),
+        offsets=(0,),
+        block_shape=(Q_TILE_SIZE,),
+        order=(0, )
+    )
+
+    dO_block_ptr = tl.make_block_ptr(
+        dO_ptr + batch_index * stride_dob,
+        shape=(N_QUERIES, D),
+        strides=(stride_doq, stride_dod),
+        offsets=(0, 0),
+        block_shape=(Q_TILE_SIZE, D),
+        order=(1, 0)
+    )
+
+    D_block_ptr = tl.make_block_ptr(
+        D_ptr + batch_index * stride_db,
+        shape=(N_QUERIES,),
+        strides=(stride_dq,),
+        offsets=(0,),
+        block_shape=(Q_TILE_SIZE,),
+        order=(0,)
+    )
+
+    Q_i = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option='zero')
+    L_i = tl.load(L_block_ptr, boundary_check=(0,), padding_option='zero')
+    dO_i = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_option='zero')
+    D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_option='zero')
+
+    dQ_i = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32)
+
+    n_keys = (key_tile_index + 1) * K_TILE_SIZE if is_causal else N_KEYS
+    for j in range(tl.cdiv(n_keys, K_TILE_SIZE)):
+        K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option='zero')
+        V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option='zero')
+
+        S_ij = tl.dot(Q_i, K_j.T) * scale
+
+        if is_causal:
+            query_indices = tl.arange(0, Q_TILE_SIZE)
+            key_indices = j * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)
+            # (Q_TILE_SIZE, 1) x (1, K_TILE_SIZE) ==> (Q_TILE_SIZE, K_TILE_SIZE)
+            mask = query_indices[:, None] < key_indices[None, :]
+            # if mask is True, set S_ij to -inf
+            S_ij = tl.where(mask, float('-inf'), S_ij)
+        
+        P_ij = tl.exp(S_ij - L_i[:, None])
+
+        dP_ij = tl.dot(dO_i, V_j.T)
+
+        dS_ij = P_ij * (dP_ij - D_i[:, None])
+
+        dQ_i += tl.dot(dS_ij, K_j) * scale
+
+        K_block_ptr = tl.advance(K_block_ptr, (K_TILE_SIZE, 0))
+        V_block_ptr = tl.advance(V_block_ptr, (K_TILE_SIZE, 0))
+    
+    dQ_block_ptr = tl.make_block_ptr(
+        dQ_ptr + batch_index * stride_qb,
+        shape=(N_QUERIES, D),
+        strides=(stride_qq, stride_qd),
+        offsets=(0, 0),
+        block_shape=(Q_TILE_SIZE, D),
+        order=(1, 0)
+    )
+
+    tl.store(dQ_block_ptr, dQ_i.to(dO_block_ptr.dtype.element_ty), boundary_check=(0, 1))
+
+
+@triton.jit
+def flash_bwd_dKdV_kernel(
+    Q_ptr, K_ptr, V_ptr,    # input matrix pointers
+    L_ptr,                  # Logsumexp matrix pointers
+    dO_ptr,                 # gradient of output matrix pointer
+    D_ptr,                  # output * gradient matrix pointer
+    dK_ptr, dV_ptr,         # gradient of K/V matrix pointers
+    # Stride parameters for each tensor
+    stride_qb, stride_qq, stride_qd,    # Q batch/query/feature strides
+    stride_kb, stride_kk, stride_kd,    # K batch/key/feature strides  
+    stride_vb, stride_vk, stride_vd,    # V batch/key/feature strides
+    stride_lb, stride_lq,               # L batch/query strides
+    stride_dob, stride_doq, stride_dod, # dO batch/query/feature strides
+    stride_db, stride_dq,               # D batch/query strides
     N_QUERIES, N_KEYS,                  # Number of queries and keys
     scale,                              # Scaling factor 1/sqrt(d)
     D: tl.constexpr,                    # Feature dimension (compile-time constant)
@@ -333,18 +455,11 @@ def flash_bwd_kernel(
         order=(0,)
     )
 
-    dQ_ptr_base = dQ_ptr + batch_index * stride_dqb
-
     K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option='zero')
     V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option='zero')
 
     dK_i = tl.zeros((K_TILE_SIZE, D), dtype=tl.float32)
     dV_i = tl.zeros((K_TILE_SIZE, D), dtype=tl.float32)
-
-    cols = tl.arange(0, D)
-    curr_Q_idx = query_tile_index * Q_TILE_SIZE
-    offsets_dQ = (curr_Q_idx + tl.arange(0, Q_TILE_SIZE))[:, None] * stride_dqq \
-                + cols[None, :] * stride_dqd
 
     for i in range(query_tile_index, tl.cdiv(N_QUERIES, Q_TILE_SIZE)):
         Q_i = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option='zero')
@@ -372,19 +487,10 @@ def flash_bwd_kernel(
 
         dK_i += tl.dot(dS_ij.T, Q_i) * scale
 
-        # Update dQ atomically
-        dQ_step = tl.dot(dS_ij, K_j) * scale
-
-        mask = (curr_Q_idx + tl.arange(0, Q_TILE_SIZE))[:, None] < N_QUERIES
-        tl.atomic_add(dQ_ptr_base + offsets_dQ, dQ_step.to(dO_block_ptr.dtype.element_ty), mask=mask)
-
         Q_block_ptr = tl.advance(Q_block_ptr, (Q_TILE_SIZE, 0))
         L_block_ptr = tl.advance(L_block_ptr, (Q_TILE_SIZE,))
         dO_block_ptr = tl.advance(dO_block_ptr, (Q_TILE_SIZE, 0))
         D_block_ptr = tl.advance(D_block_ptr, (Q_TILE_SIZE,))
-
-        offsets_dQ += Q_TILE_SIZE * stride_dqq
-        curr_Q_idx += Q_TILE_SIZE
 
     dK_block_ptr = tl.make_block_ptr(
         dK_ptr + batch_index * stride_kb,
@@ -460,7 +566,7 @@ class FlashAttentionTriton(torch.autograd.Function):
         assert dO.is_contiguous(), "FlashAttentionTriton only supports contiguous tensors."
 
         Br, Bc = 32, 32
-        Tc = ceil(seq_kv / Bc)
+        Tr, Tc = ceil(seq_q / Br), ceil(seq_kv / Bc)
 
         softmax_scale = 1.0 / (dim ** 0.5)
 
@@ -470,13 +576,14 @@ class FlashAttentionTriton(torch.autograd.Function):
 
         D = torch.sum(O * dO, dim=-1)
 
-        grid = (Tc, B)
-        flash_bwd_kernel[grid](
+        # compute dQ
+        grid = (Tr, B)
+        flash_bwd_dQ_kernel[grid](
             Q, K, V,
             L,
             dO,
             D,
-            dQ, dK, dV,
+            dQ,
             Q.stride(0), Q.stride(1), Q.stride(2),
             K.stride(0), K.stride(1), K.stride(2),
             V.stride(0), V.stride(1), V.stride(2),
@@ -484,6 +591,25 @@ class FlashAttentionTriton(torch.autograd.Function):
             dO.stride(0), dO.stride(1), dO.stride(2),
             D.stride(0), D.stride(1),
             dQ.stride(0), dQ.stride(1), dQ.stride(2),
+            seq_q, seq_kv,
+            softmax_scale,
+            D=dim, Q_TILE_SIZE=Br, K_TILE_SIZE=Bc, is_causal=is_causal
+        )
+
+        # compute dK, dV
+        gird = (Tc, B)
+        flash_bwd_dKdV_kernel(
+            Q, K, V,
+            L, 
+            dO,
+            D,
+            dK, dV,
+            Q.stride(0), Q.stride(1), Q.stride(2),
+            K.stride(0), K.stride(1), K.stride(2),
+            V.stride(0), V.stride(1), V.stride(2),
+            L.stride(0), L.stride(1),
+            dO.stride(0), dO.stride(1), dO.stride(2),
+            D.stride(0), D.stride(1),
             seq_q, seq_kv,
             softmax_scale,
             D=dim, Q_TILE_SIZE=Br, K_TILE_SIZE=Bc, is_causal=is_causal

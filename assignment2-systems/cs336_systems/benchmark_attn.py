@@ -1,7 +1,7 @@
 import torch
 import timeit
 import pandas as pd
-from einops import rearrange, einsum, reduce
+from einops import einsum, reduce
 
 
 torch.set_float32_matmul_precision('high')
