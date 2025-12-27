@@ -1,6 +1,5 @@
 import os
 import torch
-import pandas as pd
 import torch.nn as nn
 import torch.distributed as dist
 import torch.multiprocessing as mp
