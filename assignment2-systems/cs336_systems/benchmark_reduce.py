@@ -60,7 +60,7 @@ def benchmark_reduce(
     dist.destroy_process_group()
 
 
-def run_benchmark(output_file=f"../result/ddp/reuduce_results.md"):
+def run_benchmark(output_file=f"../result/ddp/reduce_results.md"):
     backends, tensor_sizes, world_size = get_config()
     print(f'Fixed world size: {world_size}')
     results = []

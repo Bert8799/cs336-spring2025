@@ -43,6 +43,8 @@ def benchmark_naive(
         outputs = model(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
+        # NOTE: naive version: use all_reduce for each param grad
+        #       flattened version: flatten all grads, all_reduce once
         # TODO: A huge memory usage happens here
         flattened_grads = torch._utils._flatten_dense_tensors(
             [param.grad for param in model.parameters()]

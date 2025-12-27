@@ -3,6 +3,7 @@ import torch
 import pandas as pd
 import torch.distributed as dist
 import torch.multiprocessing as mp
+# NOTE: commment below line if testing
 from ddp_naive import setup
 from benchmark import get_config, get_batch
 from cs336_basics.optimizer import AdamW
@@ -31,6 +32,7 @@ class ShardedOptimizer(torch.optim.Optimizer):
         with torch.no_grad():
             for i, param in enumerate(self.all_params):
                 src_rank = i % self.world_size
+                # TODO: use all_gather for better performance
                 handle = dist.broadcast(param, src=src_rank, async_op=True)
                 self.handles.append(handle)
 
@@ -43,6 +45,7 @@ class ShardedOptimizer(torch.optim.Optimizer):
         # TODO: Handle new param groups in sharded optimizer
 
 
+# NOTE: commment below line if testing
 def benchmark_sharded_optim(
     rank, world_size, backend,
     model_params, sharded,
