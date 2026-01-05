@@ -22,3 +22,6 @@ datasets/
 
 # training results
 result/
+
+# built python wheel files
+*.whl
