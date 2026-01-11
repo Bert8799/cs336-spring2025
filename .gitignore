@@ -22,6 +22,11 @@ datasets/
 
 # training results
 result/
+wandb/
 
 # built python wheel files
 *.whl
+
+# Claude files
+.claude/
+CLAUDE.md
