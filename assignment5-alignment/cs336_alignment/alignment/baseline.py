@@ -8,7 +8,7 @@ from typing import List, Callable
 from vllm import LLM, SamplingParams
 from vllm.distributed.parallel_state import destroy_model_parallel
 
-from cs336_alignment.config import BaseConfig
+from cs336_alignment.alignment.config import BaseConfig
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
 
 

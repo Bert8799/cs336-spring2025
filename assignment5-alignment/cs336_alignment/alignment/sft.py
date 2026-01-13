@@ -9,10 +9,10 @@ from transformers import (
     PreTrainedModel, AutoModelForCausalLM, AutoTokenizer
 )
 
-from cs336_alignment.sft_utils import *
-from cs336_alignment.config import SFTConfig
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
-from cs336_alignment.baseline import (
+from cs336_alignment.alignment.sft_utils import *
+from cs336_alignment.alignment.config import SFTConfig
+from cs336_alignment.alignment.baseline import (
     evaluate_vllm, get_prompts, get_sampling_params, destroy_vllm
 )
 

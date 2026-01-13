@@ -2,7 +2,7 @@ import torch
 from einops import rearrange
 from typing import Callable, List, Literal
 
-from cs336_alignment.sft_utils import masked_normalize
+from cs336_alignment.alignment.sft_utils import masked_normalize
 
 
 def compute_group_normalized_rewards(

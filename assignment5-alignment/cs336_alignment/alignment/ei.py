@@ -1,11 +1,11 @@
 import pandas as pd
 from vllm import SamplingParams
 
-from cs336_alignment.sft_utils import *
-from cs336_alignment.config import EIConfig
-from cs336_alignment.baseline import evaluate_vllm
+from cs336_alignment.alignment.sft_utils import *
+from cs336_alignment.alignment.config import EIConfig
+from cs336_alignment.alignment.baseline import evaluate_vllm
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
-from cs336_alignment.sft import (
+from cs336_alignment.alignment.sft import (
     sft_train, run_training, load_policy_into_vllm_instance
 )
 

@@ -4,16 +4,16 @@ from typing import List
 from torch.amp import autocast
 from vllm import LLM, SamplingParams
 
-from cs336_alignment.grpo_utils import *
-from cs336_alignment.config import GRPOConfig
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
-from cs336_alignment.baseline import (
+from cs336_alignment.alignment.grpo_utils import *
+from cs336_alignment.alignment.config import GRPOConfig
+from cs336_alignment.alignment.baseline import (
     evaluate_vllm, get_prompts, get_sampling_params
 )
-from cs336_alignment.sft_utils import (
+from cs336_alignment.alignment.sft_utils import (
     tokenize_prompt_and_output, get_response_log_probs
 )
-from cs336_alignment.sft import (
+from cs336_alignment.alignment.sft import (
     run_training, load_policy_into_vllm_instance
 )
 

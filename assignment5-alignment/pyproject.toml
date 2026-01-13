@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["cs336_alignment"]
+include = ["cs336_alignment*"]
 
 [tool.uv]
 package = true

@@ -4,7 +4,7 @@ from tqdm import tqdm
 from pathlib import Path
 from typing import Optional, List
 
-from cs336_alignment.config import BaseConfig
+from cs336_alignment.alignment.config import BaseConfig
 
 
 pre_cfg = BaseConfig()
