@@ -1,4 +1,3 @@
-import argparse
 import json
 import regex as re
 from tqdm import tqdm
@@ -158,7 +157,7 @@ def process_math_dataset(data_dir: Path) -> None:
                     response = " " + solution + " </think> <answer> " + answer + " </answer>"
                     record = {"prompt": prompt, "response": response, "ground_truth": answer}
                 else:
-                    record = {"question": question, "answer": answer}
+                    record = {"prompt": question, "ground_truth": answer}
                 fout.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     _convert(src_train, out_train)
@@ -170,29 +169,8 @@ def process_math_dataset(data_dir: Path) -> None:
     filter_long_data(out_sft, out_sft, percentile=pre_cfg.filter_long_ratio)
 
 def main():
-    parser = argparse.ArgumentParser(description="Preprocess datasets")
-    parser.add_argument(
-        "--dataset",
-        choices=["MATH", "gsm8k"],
-        default=pre_cfg.dataset,
-        help="Dataset to preprocess",
-    )
-    parser.add_argument(
-        "--data-dir",
-        type=str,
-        default=None,
-        help="Override data directory for the dataset (defaults to repo data path)",
-    )
-    args = parser.parse_args()
-
-    repo_root = Path(__file__).resolve().parents[1]
-    if args.dataset == pre_cfg.dataset:
-        data_dir = (
-            Path(args.data_dir)
-            if args.data_dir is not None
-            else repo_root / "data" / pre_cfg.dataset
-        )
-        process_math_dataset(data_dir)
+    data_dir = Path(pre_cfg.data_dir) / pre_cfg.dataset
+    process_math_dataset(data_dir)
 
 
 if __name__ == "__main__":

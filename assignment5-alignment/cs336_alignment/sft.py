@@ -163,13 +163,13 @@ def sft_train(cfg: SFTConfig, model, tokenizer, vllm, optimizer, train_data, eva
         if (step + 1) % cfg.eval_interval == 0:
             load_policy_into_vllm_instance(model, vllm)
             batch = eval_data.sample(cfg.eval_batch_size)
-            prompts = get_prompts(prompt_template, batch[cfg.question].tolist())
+            prompts = get_prompts(prompt_template, batch['prompt'].tolist())
             all_records = evaluate_vllm(
                 vllm,
                 r1_zero_reward_fn,
                 sampling_params,
                 prompts,
-                batch[cfg.answer].tolist(),
+                batch['ground_truth'].tolist(),
                 use_tqdm=True,
             )
 
@@ -237,6 +237,7 @@ def run_training(cfg: SFTConfig, train_fn, **train_kwargs):
         device_map=cfg.device_train,
     )
     model.gradient_checkpointing_enable()
+    print(f"Loaded model from {cfg.model_dir}")
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_dir)
     optimizer = get_optimizer(cfg, model)
@@ -250,8 +251,12 @@ def run_training(cfg: SFTConfig, train_fn, **train_kwargs):
     )
 
     # Load datasets
-    train_data = pd.read_json(f"{cfg.data_dir}/{cfg.dataset}/sft.jsonl", lines=True)
-    eval_data = pd.read_json(f"{cfg.data_dir}/{cfg.dataset}/validation.jsonl", lines=True)
+    train_data_path = f"{cfg.data_dir}/{cfg.dataset}/{cfg.train_data}"
+    print(f"Loading training data from {train_data_path}")
+    train_data = pd.read_json(train_data_path, lines=True)
+    eval_data_path = f"{cfg.data_dir}/{cfg.dataset}/validation.jsonl"
+    print(f"Loading evaluation data from {eval_data_path}")
+    eval_data = pd.read_json(eval_data_path, lines=True)
 
     # Run training
     result = train_fn(cfg, model, tokenizer, vllm, optimizer, train_data, eval_data, **train_kwargs)

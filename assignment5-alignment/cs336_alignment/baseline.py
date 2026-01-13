@@ -6,7 +6,6 @@ import pandas as pd
 from os import PathLike
 from typing import List, Callable
 from vllm import LLM, SamplingParams
-from contextlib import contextmanager
 from vllm.distributed.parallel_state import destroy_model_parallel
 
 from cs336_alignment.config import BaseConfig
@@ -115,8 +114,8 @@ def evaluate_model(use_test_model: bool = False):
         prompt_template = f.read()
     sampling_params = get_sampling_params()
     df = pd.read_json(baseline_cfg.validation_input_path, lines=True)
-    questions = df[baseline_cfg.question_placeholder.strip("{}")].tolist()
-    answers = df[baseline_cfg.answer_placeholder.strip("{}")].tolist()
+    questions = df['prompt'].tolist()
+    answers = df['ground_truth'].tolist()
     prompts = get_prompts(prompt_template, questions)
     evaluate_vllm(
         llm,
