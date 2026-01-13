@@ -24,21 +24,25 @@ def rollout(
     prompts: List[str],
     groud_truth: List[str],
     use_tqdm: bool = False,
-) -> pd.DataFrame:
-    """Generate rollouts from the policy given the prompts."""
+) -> tuple[List[str], List[str], List[str]]:
+    """Generate rollouts from the policy given the prompts.
+
+    Returns three flat lists of length `len(prompts) * sampling_params.n`:
+    (prompts, responses, ground_truths).
+    """
     responses = policy.generate(prompts, sampling_params, use_tqdm=use_tqdm)
-    generated = [[output.text for output in resp.outputs] for resp in responses] # List[List[str]]
 
-    df = pd.DataFrame({
-        "prompt": prompts,
-        "response": generated,
-        "ground_truth": groud_truth
-    })
+    flat_responses: List[str] = []
+    for resp in responses:
+        # resp.outputs length should equal sampling_params.n
+        flat_responses.extend([output.text for output in resp.outputs])
 
-    return df.explode(column="response")
+    n_per_prompt = sampling_params.n
+    flat_prompts = [p for p in prompts for _ in range(n_per_prompt)]
+    flat_ground_truths = [gt for gt in groud_truth for _ in range(n_per_prompt)]
+    return flat_prompts, flat_responses, flat_ground_truths
 
 
-# TODO: the effect is not good, why?
 def grpo_train(cfg: GRPOConfig, policy, tokenizer, old_policy, optimizer, train_data: pd.DataFrame, eval_data):
     assert cfg.train_batch_size % cfg.gradient_accumulation_steps == 0, (
         "train_batch_size must be divisible by gradient_accumulation_steps"
@@ -74,20 +78,20 @@ def grpo_train(cfg: GRPOConfig, policy, tokenizer, old_policy, optimizer, train_
         load_policy_into_vllm_instance(policy, old_policy)
         batch = train_data.sample(n_prompts_per_rollout_batch)
         prompts = get_prompts(prompt_template, batch['prompt'].to_list())
-        rollout_batch = rollout(
+        rollout_prompts, rollout_responses, rollout_ground_truths = rollout(
             old_policy,
             sampling_params,
             prompts,
             batch['ground_truth'].to_list(),
             use_tqdm=False,
         )
-        assert len(rollout_batch) == cfg.rollout_batch_size, "Rollout batch size mismatch."
+        assert len(rollout_responses) == cfg.rollout_batch_size, "Rollout batch size mismatch."
 
         # compute advantages and rewards
         advantages, raw_rewards, metadata = compute_group_normalized_rewards(
             r1_zero_reward_fn,
-            rollout_batch['response'].to_list(),
-            rollout_batch['ground_truth'].to_list(),
+            rollout_responses,
+            rollout_ground_truths,
             cfg.group_size,
             cfg.advantage_eps,
             normalize_by_std=cfg.use_std_normalization,
@@ -96,13 +100,11 @@ def grpo_train(cfg: GRPOConfig, policy, tokenizer, old_policy, optimizer, train_
 
         print(f"Step {step+1}/{cfg.n_grpo_steps} Rollout Rewards: "
               f"Mean: {metadata['mean_reward']:.3f}, "
-              f"Std: {metadata['std_reward']:.3f}, "
-              f"Max: {metadata['max_reward']:.3f}, "
-              f"Min: {metadata['min_reward']:.3f}")
+              f" Std: {metadata['std_reward']:.3f}")
 
         dicts = tokenize_prompt_and_output(
-            rollout_batch['prompt'].tolist(),
-            rollout_batch['response'].tolist(),
+            rollout_prompts,
+            rollout_responses,
             tokenizer
         )
         input_ids = dicts["input_ids"]
@@ -111,6 +113,7 @@ def grpo_train(cfg: GRPOConfig, policy, tokenizer, old_policy, optimizer, train_
 
         # NOTE: if epochs_per_rollout_batch == 1,  we don't need compute old logprobs here
         # Compute old policy log probs for clipping
+        policy.eval()
         old_policy_log_probs_list = []
         for mb_idx in range(n_microbatches_per_rollout_batch):
             start_idx = mb_idx * cfg.micro_batch_size
@@ -129,11 +132,12 @@ def grpo_train(cfg: GRPOConfig, policy, tokenizer, old_policy, optimizer, train_
                 # store them in cpu to save gpu memory
                 old_policy_log_probs_list.append(old_policy_response['log_probs'].cpu())
         old_policy_log_probs = torch.cat(old_policy_log_probs_list, dim=0)
+        policy.train()
 
         # GRPO training step
         for epoch in range(cfg.epochs_per_rollout_batch):
-            loss_accum = 0.0
-            entropy_accum = 0.0
+            loss_accum = torch.tensor(0.0, device=cfg.device_train)
+            entropy_accum = torch.tensor(0.0, device=cfg.device_train)
             for mb_idx in range(n_microbatches_per_rollout_batch):
                 start_idx = mb_idx * cfg.micro_batch_size
                 end_idx = start_idx + cfg.micro_batch_size
@@ -153,7 +157,9 @@ def grpo_train(cfg: GRPOConfig, policy, tokenizer, old_policy, optimizer, train_
                         policy, mb_input_ids, mb_labels, 
                         return_token_entropy=True
                     )
+                    # a tensor
                     policy_log_probs = policy_response['log_probs']
+                    # a scalar
                     policy_entropy = policy_response['token_entropy']
 
                     loss, _ = grpo_microbatch_train_step(
@@ -167,8 +173,8 @@ def grpo_train(cfg: GRPOConfig, policy, tokenizer, old_policy, optimizer, train_
                         cfg.cliprange,
                         masked_type=cfg.masked_type,
                     )
-                    loss_accum += loss.item()
-                    entropy_accum += policy_entropy.mean().item() / cfg.gradient_accumulation_steps
+                    loss_accum += loss.detach()
+                    entropy_accum += policy_entropy.mean() / cfg.gradient_accumulation_steps
 
             # Since n_microbatches_per_rollout_batch == gradient_accumulation_steps
             # we can step the optimizer here
@@ -178,8 +184,8 @@ def grpo_train(cfg: GRPOConfig, policy, tokenizer, old_policy, optimizer, train_
             optimizer.zero_grad()
 
             wandb.log({
-                "train/loss": loss_accum,
-                "train/entropy": entropy_accum,
+                "train/loss": loss_accum.item(),
+                "train/entropy": entropy_accum.item(),
                 "train/mean_reward": metadata['mean_reward'],
                 "train_step": step*cfg.epochs_per_rollout_batch + epoch + 1,
             })

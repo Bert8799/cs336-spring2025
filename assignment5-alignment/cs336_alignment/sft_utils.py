@@ -59,17 +59,17 @@ def get_response_log_probs(
     labels: torch.Tensor, # shape (batch_size, seq_len)
     return_token_entropy: bool = False,
     inference_mode: bool = False,
-) -> dict[str, torch.Tensor]:
+) -> dict[str, torch.Tensor | any]:
     context = torch.inference_mode() if inference_mode else nullcontext()
     with context:
         logits = model(input_ids).logits # shape (batch_size, seq_len, vocab_size)
         log_probs = F.log_softmax(logits, dim=-1)
-        log_probs_labels = torch.gather(
+        log_probs_labels = torch.gather( # shape (batch_size, seq_len)
             log_probs, dim=-1, index=labels.unsqueeze(-1)
         ).squeeze(-1)
         result = {"log_probs": log_probs_labels} # for loss computation
         if return_token_entropy:
-            entropy = compute_entropy(logits)
+            entropy = compute_entropy(logits).detach()
             result["token_entropy"] = entropy # for perplexity and exploration bonus
     return result
 

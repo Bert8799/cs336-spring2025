@@ -24,7 +24,7 @@ class BaseConfig:
     data_dir: str = "data"
     model_dir: str = "data/model/Qwen/Qwen2.5-Math-1.5B"
 
-    test_model_dir: str = "result/grpo/GRPO_gsm8k_3*256*256"
+    test_model_dir: str = "result/grpo/GRPO_MATH_3*256*64"
     
     prompt_template_path: str = "cs336_alignment/prompts/r1_zero.prompt"
     prompt_placeholder: str = "{question}"
@@ -137,8 +137,8 @@ class EIConfig(SFTConfig):
 class GRPOConfig(SFTConfig):
     # Original model's accuracy is too low
     # so we use the SFT model as the starting point
-    # model_dir: str = "result/sft/SFT_MATH_1024*512"
-    dataset: str = "gsm8k"
+    model_dir: str = "result/sft/SFT_MATH_1024*512"
+    dataset: str = "MATH"
     train_data: str = "train.jsonl"
     output_dir: str = "result/grpo"
 
@@ -149,11 +149,12 @@ class GRPOConfig(SFTConfig):
     micro_batch_size: int = 2
     gradient_accumulation_steps: int = 128
 
-    # eval_batch_size: int = 1024 # for SFT MATH
-    eval_batch_size: int = 512 # for base gsm8k
+    eval_batch_size: int = 1024 # for SFT MATH
+    # eval_batch_size: int = 512 # for base gsm8k
     eval_interval: int = 8
 
-    n_grpo_steps: int = 256
+    n_grpo_steps: int = 64 # for SFT MATH
+    # n_grpo_steps: int = 256 # for base gsm8k
     rollout_batch_size: int = 256
     group_size: int = 8
     epochs_per_rollout_batch: int = 3 # if 1, on policy ==> reinforce
@@ -167,8 +168,7 @@ class GRPOConfig(SFTConfig):
     masked_type: Literal[0, 1] = 1
     use_std_normalization: bool = False
 
-    # lr: float = 1e-6 # for SFT MATH
-    lr: float = 3e-5 # for base gsm8k
+    lr: float = 3e-5
     weight_decay: float = 0.0
     adam_beta2: float = 0.95
 

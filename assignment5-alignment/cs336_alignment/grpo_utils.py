@@ -29,8 +29,6 @@ def compute_group_normalized_rewards(
         metadata = {
             "mean_reward": raw_rewards.mean().item(),
             "std_reward": raw_rewards.std().item(),
-            "max_reward": raw_rewards.max().item(),    
-            "min_reward": raw_rewards.min().item(),
         }
     else:
         metadata = {}
@@ -155,7 +153,7 @@ def grpo_microbatch_train_step(
         ).mean() / gradient_accumulation_steps
     elif masked_type == 1:
         normalize_constant = response_mask.sum(dim=-1).max()
-        loss = - masked_normalize(
+        loss = masked_normalize(
             loss,
             response_mask,
             normalize_constant,
