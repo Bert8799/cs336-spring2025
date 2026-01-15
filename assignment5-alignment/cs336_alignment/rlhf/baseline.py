@@ -219,7 +219,7 @@ def run_evaluation(
         accuracy = correct_count / len(eval_items)
         print(f"[{dataset_name}] Accuracy: {accuracy*100:.2f}% ({correct_count}/{len(eval_items)})")
 
-    result_dir = Path(cfg.result_dir)
+    result_dir = Path(cfg.result_dir) / cfg.output_dir
     result_dir.mkdir(parents=True, exist_ok=True)
     out_file = result_dir / f"{dataset_name}_baseline.jsonl"
     

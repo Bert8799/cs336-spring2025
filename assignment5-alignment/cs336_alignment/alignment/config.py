@@ -24,7 +24,7 @@ class BaseConfig:
     data_dir: str = "data"
     model_dir: str = "data/model/Qwen/Qwen2.5-Math-1.5B"
 
-    test_model_dir: str = "result/grpo/GRPO_MATH_3*256*64"
+    test_model_dir: str = "result/alignment/grpo/GRPO_MATH_3*256*64"
     
     prompt_template_path: str = "cs336_alignment/prompts/r1_zero.prompt"
     prompt_placeholder: str = "{question}"
@@ -47,9 +47,9 @@ class BaseConfig:
 
     def __post_init__(self):
         # Compute paths based on dataset
-        self.test_output_path = f"result/grpo/grpo_gsm8k_{self.dataset}.jsonl"
+        self.test_output_path = f"result/alignment/grpo/grpo_gsm8k_{self.dataset}.jsonl"
         self.validation_input_path = f"{self.data_dir}/{self.dataset}/validation.jsonl"
-        self.baseline_output_path = f"result/baseline/baseline_r1_zero_{self.dataset}.jsonl"
+        self.baseline_output_path = f"result/alignment/baseline/baseline_r1_zero_{self.dataset}.jsonl"
 
         # Get dataset-specific configs
         config = _DATASET_CONFIGS.get(self.dataset, _DATASET_CONFIGS[self.dataset])
@@ -65,7 +65,7 @@ class SFTConfig:
     model_dir: str = "data/model/Qwen/Qwen2.5-Math-1.5B"
     dataset: str = "MATH"  # Options: "MATH", "gsm8k"
     train_data: str = "stf.jsonl"
-    output_dir: str = "result/sft"
+    output_dir: str = "result/alignment/sft"
 
     gpu_memory_utilization: float = 0.75
 
@@ -110,8 +110,8 @@ class SFTConfig:
 class EIConfig(SFTConfig):
     # Original model's accuracy is too low
     # so we use the SFT model as the starting point
-    model_dir: str = "result/sft/SFT_MATH_1024*512"
-    output_dir: str = "result/ei"
+    model_dir: str = "result/alignment/sft/SFT_MATH_1024*512"
+    output_dir: str = "result/alignment/ei"
 
     train_data_size: Optional[int] = None
     train_steps: int = 128
@@ -137,17 +137,17 @@ class EIConfig(SFTConfig):
 class GRPOConfig(SFTConfig):
     # Original model's accuracy is too low
     # so we use the SFT model as the starting point
-    model_dir: str = "result/sft/SFT_MATH_1024*512"
+    model_dir: str = "result/alignment/sft/SFT_MATH_1024*512"
     dataset: str = "MATH"
     train_data: str = "train.jsonl"
-    output_dir: str = "result/grpo"
+    output_dir: str = "result/alignment/grpo"
 
     train_data_size: Optional[int] = None 
     train_steps: Optional[int] = None # on policy
     train_batch_size: int = 256 # 1 rollout, 1 step
     # Avoid cuda out of memory
-    micro_batch_size: int = 2
-    gradient_accumulation_steps: int = 128
+    micro_batch_size: int = 4
+    gradient_accumulation_steps: int = 64
 
     eval_batch_size: int = 1024 # for SFT MATH
     # eval_batch_size: int = 512 # for base gsm8k
@@ -180,4 +180,4 @@ class GRPOConfig(SFTConfig):
 
     def __post_init__(self):
         # Generate wandb run name for GRPO
-        object.__setattr__(self, "wandb_run_name", f"GRPO_{self.dataset}_{self.epochs_per_rollout_batch}*{self.rollout_batch_size}*{self.n_grpo_steps}")
+        object.__setattr__(self, "wandb_run_name", f"GRPO-{self.dataset}-{self.epochs_per_rollout_batch}epochs-{self.n_grpo_steps}steps")

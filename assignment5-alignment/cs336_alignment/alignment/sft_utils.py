@@ -59,7 +59,7 @@ def get_response_log_probs(
     labels: torch.Tensor, # shape (batch_size, seq_len)
     return_token_entropy: bool = False,
     inference_mode: bool = False,
-) -> dict[str, torch.Tensor | any]:
+) -> dict[str, torch.Tensor]:
     context = torch.inference_mode() if inference_mode else nullcontext()
     with context:
         logits = model(input_ids).logits # shape (batch_size, seq_len, vocab_size)

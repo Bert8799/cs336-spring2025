@@ -1,5 +1,7 @@
 import torch
 import wandb
+import random
+import numpy as np
 import pandas as pd
 from vllm import LLM
 from torch.amp import autocast
@@ -213,6 +215,10 @@ def run_training(cfg: SFTConfig, train_fn, **train_kwargs):
     Returns:
         The return value from train_fn
     """
+    torch.manual_seed(cfg.seed)
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+
     # Initialize wandb
     wandb.init(
         project=cfg.wandb_project,
@@ -237,6 +243,9 @@ def run_training(cfg: SFTConfig, train_fn, **train_kwargs):
         device_map=cfg.device_train,
     )
     model.gradient_checkpointing_enable()
+    # Required by HF when using gradient checkpointing.
+    if hasattr(model, "config"):
+        model.config.use_cache = False
     print(f"Loaded model from {cfg.model_dir}")
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_dir)
