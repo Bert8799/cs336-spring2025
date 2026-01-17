@@ -14,10 +14,14 @@ def compute_group_normalized_rewards(
     normalize_by_std: bool = True,
     return_metadata: bool = False
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
-    raw_rewards = torch.tensor([
-        reward_fn(rollout, gt)["reward"]
-        for rollout, gt in zip(rollout_responses, repeated_ground_truths)
-    ])
+    rewards_list = []
+    for rollout, gt in zip(rollout_responses, repeated_ground_truths):
+        scores = reward_fn(rollout, gt)
+        
+        final_score = scores["format_reward"] * 0.1 + scores["answer_reward"] * 0.9
+        rewards_list.append(final_score)
+    raw_rewards = torch.tensor(rewards_list)
+    
     # Reshape to (n_prompts_per_rollout_batch, group_size)
     rewards_grouped = rearrange(raw_rewards, '(n g) -> n g', g=group_size)
     advantages = rewards_grouped - rewards_grouped.mean(dim=-1, keepdim=True)

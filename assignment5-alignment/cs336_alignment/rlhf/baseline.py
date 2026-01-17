@@ -4,7 +4,7 @@ import logging
 import regex as re
 import pandas as pd
 from pathlib import Path
-from typing import List, Callable, Any, Tuple, Optional, Dict, Union
+from typing import List, Callable, Any, Tuple, Optional, Dict
 from dataclasses import dataclass
 from contextlib import contextmanager
 
@@ -82,7 +82,7 @@ def load_mmlu_data(cfg: BaseConfig) -> List[EvalItem]:
         template = f.read()
 
     items = []
-    print(f"Loading MMLU data from {eval_dir}...")
+    print(f"Loading MMLU data from {eval_dir}")
     for file in eval_dir.glob("*.csv"):
         # Vectorized read but iterative processing for templating
         df = pd.read_csv(file, names=['question', 'A', 'B', 'C', 'D', 'ground_truth'])
@@ -110,7 +110,7 @@ def load_gsm8k_data(cfg: BaseConfig) -> List[EvalItem]:
     with open(prompt_path, 'r') as f:
         template = f.read()
 
-    print(f"Loading GSM8K data from {data_path}...")
+    print(f"Loading GSM8K data from {data_path}")
     df = pd.read_json(data_path, lines=True)
     
     items = []
@@ -125,7 +125,7 @@ def load_gsm8k_data(cfg: BaseConfig) -> List[EvalItem]:
 
 def load_ssft_data(cfg: BaseConfig) -> List[EvalItem]:
     data_path = Path(cfg.data_dir) / cfg.simple_safety_dataset / "simple_safety_tests.csv"
-    print(f"Loading SSFT data from {data_path}...")
+    print(f"Loading SSFT data from {data_path}")
     df = pd.read_csv(data_path, usecols=['prompts_final'])
     items = []
     for _, row in df.iterrows():
@@ -221,7 +221,7 @@ def run_evaluation(
 
     result_dir = Path(cfg.result_dir) / cfg.output_dir
     result_dir.mkdir(parents=True, exist_ok=True)
-    out_file = result_dir / f"{dataset_name}_baseline.jsonl"
+    out_file = result_dir / f"{dataset_name}_{cfg.output_type}.jsonl"
     
     pd.DataFrame(results).to_json(out_file, lines=True, orient='records')
     print(f"Results saved to {out_file}")

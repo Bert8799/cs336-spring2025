@@ -1,10 +1,14 @@
-from gguf import Literal
-from typing import Optional
 from dataclasses import dataclass, field
+from typing import Optional
+
+from gguf import Literal
 
 
-# Simplified config: only need to change `dataset` field
-_DATASET_CONFIGS = {
+_RESULT_ALIGNMENT_DIR = "result/alignment"
+
+
+# Simplified config: only need to change `dataset` field.
+_DATASET_CONFIGS: dict[str, dict[str, str]] = {
     "MATH": {
         "raw_question_placeholder": "{problem}",
         "raw_solution_placeholder": "{solution}",
@@ -18,13 +22,18 @@ _DATASET_CONFIGS = {
 }
 
 
+def _get_dataset_config(dataset: str) -> dict[str, str]:
+    # Preserve current behavior: unknown datasets should raise KeyError.
+    return _DATASET_CONFIGS[dataset]
+
+
 @dataclass
 class BaseConfig:
     seed: int = 42
     data_dir: str = "data"
     model_dir: str = "data/model/Qwen/Qwen2.5-Math-1.5B"
 
-    test_model_dir: str = "result/alignment/grpo/GRPO_MATH_3*256*64"
+    test_model_dir: str = "result/alignment/grpo/GRPO-MATH-2epochs-24steps"
     
     prompt_template_path: str = "cs336_alignment/prompts/r1_zero.prompt"
     prompt_placeholder: str = "{question}"
@@ -35,7 +44,7 @@ class BaseConfig:
     filter_long_ratio: float = 0.8
 
     # Only need to change this field!
-    dataset: str = "MATH"  # Options: "MATH", "gsm8k"
+    dataset: str = "gsm8k"  # Options: "MATH", "gsm8k"
 
     # Auto-computed fields based on dataset
     test_output_path: str = field(init=False)
@@ -46,13 +55,15 @@ class BaseConfig:
     extract_function: str = field(init=False)
 
     def __post_init__(self):
-        # Compute paths based on dataset
-        self.test_output_path = f"result/alignment/grpo/grpo_gsm8k_{self.dataset}.jsonl"
+        # Compute paths based on dataset.
+        self.test_output_path = f"{_RESULT_ALIGNMENT_DIR}/grpo/grpo_MATH_{self.dataset}.jsonl"
         self.validation_input_path = f"{self.data_dir}/{self.dataset}/validation.jsonl"
-        self.baseline_output_path = f"result/alignment/baseline/baseline_r1_zero_{self.dataset}.jsonl"
+        self.baseline_output_path = (
+            f"{_RESULT_ALIGNMENT_DIR}/baseline/baseline_r1_zero_{self.dataset}.jsonl"
+        )
 
-        # Get dataset-specific configs
-        config = _DATASET_CONFIGS.get(self.dataset, _DATASET_CONFIGS[self.dataset])
+        # Get dataset-specific configs.
+        config = _get_dataset_config(self.dataset)
         self.raw_question_placeholder = config["raw_question_placeholder"]
         self.raw_solution_placeholder = config["raw_solution_placeholder"]
         self.extract_function = config["extract_function"]
@@ -85,7 +96,7 @@ class SFTConfig:
     train_steps: int = 512
     train_batch_size: int = 32
     micro_batch_size: int = 4
-    gradient_accumulation_steps: int = 8 # train_batch_size // micro_batch_size
+    gradient_accumulation_steps: int = 8  # train_batch_size // micro_batch_size
 
     eval_batch_size: int = 256
     eval_interval: int = 16
@@ -142,22 +153,22 @@ class GRPOConfig(SFTConfig):
     train_data: str = "train.jsonl"
     output_dir: str = "result/alignment/grpo"
 
-    train_data_size: Optional[int] = None 
-    train_steps: Optional[int] = None # on policy
-    train_batch_size: int = 256 # 1 rollout, 1 step
+    train_data_size: Optional[int] = None
+    train_steps: Optional[int] = None  # on policy
+    train_batch_size: int = 240  # 1 rollout, 1 step
     # Avoid cuda out of memory
-    micro_batch_size: int = 4
-    gradient_accumulation_steps: int = 64
+    micro_batch_size: int = 6
+    gradient_accumulation_steps: int = 40
 
-    eval_batch_size: int = 1024 # for SFT MATH
-    # eval_batch_size: int = 512 # for base gsm8k
+    eval_batch_size: int = 1024  # for SFT MATH
+    # eval_batch_size: int = 512  # for base gsm8k
     eval_interval: int = 8
 
-    n_grpo_steps: int = 64 # for SFT MATH
-    # n_grpo_steps: int = 256 # for base gsm8k
-    rollout_batch_size: int = 256
+    n_grpo_steps: int = 24  # for SFT MATH
+    # n_grpo_steps: int = 256  # for base gsm8k
+    rollout_batch_size: int = 240
     group_size: int = 8
-    epochs_per_rollout_batch: int = 3 # if 1, on policy ==> reinforce
+    epochs_per_rollout_batch: int = 2  # if 1, on policy ==> reinforce
     advantage_eps: float = 1e-6
     cliprange: float = 0.2
     loss_type: Literal[
@@ -168,7 +179,7 @@ class GRPOConfig(SFTConfig):
     masked_type: Literal[0, 1] = 1
     use_std_normalization: bool = False
 
-    lr: float = 3e-5
+    lr: float = 1e-5
     weight_decay: float = 0.0
     adam_beta2: float = 0.95
 

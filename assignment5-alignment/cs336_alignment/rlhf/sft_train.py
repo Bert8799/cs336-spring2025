@@ -15,7 +15,6 @@ torchrun --standalone --nproc_per_node=2 train.py
 ```
 """
 import os
-import sys
 import torch
 import wandb
 import random

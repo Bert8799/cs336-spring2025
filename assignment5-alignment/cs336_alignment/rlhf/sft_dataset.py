@@ -61,14 +61,8 @@ class SFTDataset(Dataset):
         eos_id = self.tokenizer.eos_token_id
 
         # Qwen3-1.7B: bos_token_id may be None in some tokenizer configs.
-        if bos_id is None:
-            bos_id = 151644
-
-        if eos_id is None and getattr(self.tokenizer, "eos_token", None) is not None:
-            eos_id = self.tokenizer.convert_tokens_to_ids(self.tokenizer.eos_token)
-
-        bos = [bos_id] if bos_id is not None else []
-        eos = [eos_id] if eos_id is not None else []
+        bos = [bos_id] if bos_id is not None else [151644] # <|im_start|>
+        eos = [eos_id] if eos_id is not None else [151645] # <|im_end|>
         
         all_list = list(chain.from_iterable((bos + ids + eos) for ids in encoded))
 

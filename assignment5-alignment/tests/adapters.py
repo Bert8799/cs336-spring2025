@@ -476,4 +476,13 @@ def run_compute_per_instance_dpo_loss(
     Returns:
         torch.Tensor with the DPO loss for this example.
     """
-    raise NotImplementedError
+    from cs336_alignment.rlhf.helpers import compute_per_instance_dpo_loss
+    return compute_per_instance_dpo_loss(
+        lm,
+        lm_ref,
+        tokenizer,
+        beta,
+        prompt,
+        response_chosen,
+        response_rejected,
+    )
